@@ -26,6 +26,26 @@ The skill handles orientation, raw capture with frontmatter, page synthesis with
 cross-links and contradiction handling, index/log navigation updates, the L2
 Hindsight pointer retain, and reporting.
 
+### Extraction ladder
+
+Capture picks the **lowest rung the document survives** (verified against 2026
+PDF-parsing benchmarks):
+
+1. **Text layer** — `pymupdf4llm` for PDFs, `read_file` for .docx, `web_extract` for URLs. Free, milliseconds.
+2. **Layout models** — `docling` (tables/multi-column) or `marker` (GPU speed) when rung 1 output is scrambled.
+3. **OCR/vision** — `pdftoppm` + `tesseract`, or a vision model, for scans and photos.
+
+### Helper script
+
+`scripts/capture_raw.py` (stdlib-only) writes the raw file with `source_url` /
+`ingested` / `sha256` frontmatter and detects re-ingest drift
+(identical → skip; changed → flag + version bump):
+
+```bash
+python3 scripts/capture_raw.py --wiki ~/wiki --title "Doc Title" \
+  --source-url https://example.com/doc < extracted.txt
+```
+
 ## Workflow
 
 1. **Orient** — read SCHEMA.md / index.md / log.md (prevents duplicates)
