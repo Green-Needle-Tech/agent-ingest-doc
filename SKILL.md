@@ -1,7 +1,7 @@
 ---
 name: doc-ingest
 description: "Use when ingesting docs into the wiki and Hindsight memory."
-version: 2.1.0
+version: 2.2.0
 author: David (david6055my), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -80,8 +80,9 @@ memory (Hindsight auto-retain handles that).
    groups) can consume them. If a page is later archived/moved/renamed,
    invalidate its stale pointer (`PATCH /memories/{id}`) — recall-verified.
    If Hindsight is down (health check fails), queue the retain text in
-   `$WIKI/raw/.pending-retains.md` and retry next session. *Done when:*
-   retain confirmed (or queued).
+   `$WIKI/raw/.pending-retains.md` and retry next session. On Hindsight ≥ v0.9,
+   a recall of the pointer phrase should return the episode — cheap sanity
+   check that the retain landed. *Done when:* retain confirmed (or queued).
 7. **Report.** One line per file created/updated: raw source, wiki pages,
    index.md, log.md, retain confirmation. Include any drift/contradiction flags.
 8. **L1 promotion (rare).** Only if the ingest changes durable agent behavior
@@ -126,10 +127,12 @@ This skill implements Pattern 1 of four; know the others to know when to escalat
 2. **Wiki as Hindsight raw layer.** For high-value curated corpora, also push wiki pages through Hindsight's documents API — gaining temporal queries, entity multi-hop traversal, and automatic contradiction reconciliation across pages (a static wiki keeps contradictions "a paragraph apart"; Hindsight consolidation resolves them into observations with evidence quotes). Use sparingly: every retained token is extracted, consolidated, and reranked forever.
 3. **Dual-store role separation.** At query time, route: question maps to a known wiki page → read the page (index-first, deterministic); temporal / personal / entity-relational question → `hindsight_recall`/`reflect`. Ingest writes to both stores per this skill; queries pick by shape.
 4. **Knowledge Pages (Hindsight ≥ v0.9) — the reverse projection.** Hindsight can render its OWN wiki: `hindsight fs mount --bank <bank>` projects self-updating markdown pages (built from consolidated observations only, delta-edited on each consolidation, never reading sibling pages). A page is a projected view over memory — delete it and it re-projects from facts. Not a replacement for this skill's curated wiki: raw sources stay the truth about *what was said*; knowledge pages are the reconciled truth about *what holds*. Useful as an auto-maintained companion view of a bank's operational memory.
+   **Bridge optimization (verified live on v0.9.1, Aug 2026):** the `wiki-ref`-tagged pointers this skill retains are consolidated observations — so a Knowledge Page created with `tags: ["wiki-ref"]` (e.g. "Ingest Index", source_query "Which documents have been ingested into the wiki?") becomes a self-maintaining, delta-refreshed, document-level searchable index over the ingest history. Create it once per bank via `POST /knowledge-base/pages`, poll the returned `operation_id`, and thereafter surface `is_stale: true` pages in bulk-ingest reports. Search (`GET /knowledge-base/search?q=`) is the agent's fast first lookup; recall stays for specific facts. Never hand-edit a mounted page body — refresh overwrites it; correct scope via `PATCH` on the node. Full API surface and verified-behavior notes: `references/hindsight-knowledge-pages.md`.
 
 ## References
 
 - `references/extraction-ladder.md` — per-format extraction commands and rung decision rules
+- `references/hindsight-knowledge-pages.md` — Knowledge Pages API surface + v0.9.1 verified-behavior notes (live-tested 2026-08-23)
 - `scripts/capture_raw.py` — capture helper: frontmatter, sha256, drift detection
 - `llm-wiki` skill — wiki structure, SCHEMA templates, lint procedure
 - Hindsight docs — [Knowledge Pages](https://hindsight.vectorize.io/developer/knowledge-pages) and [Knowledge Pages API](https://hindsight.vectorize.io/developer/api/knowledge-pages) (v0.9): projection model, `hindsight fs mount`, default trigger
