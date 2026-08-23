@@ -1,7 +1,7 @@
 ---
 name: doc-ingest
 description: "Use when ingesting docs into the wiki and Hindsight memory."
-version: 2.0.0
+version: 2.1.0
 author: David (david6055my), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -71,6 +71,14 @@ memory (Hindsight auto-retain handles that).
 6. **Retain L2 pointer.** One `hindsight_retain` per ingest (or one batch
    retain for bulk): title, URL/path, domain, pages created/updated, key
    entities, wiki path. NEVER retain document content — that is L3's job.
+   The pointer pattern is deliberate (Hindsight × LLM Wiki research, Aug 2026):
+   recall surfaces the pointer and the agent opens the page, so Hindsight acts
+   as the semantic search layer over the wiki (including temporal and
+   entity-multi-hop queries the wiki's index can't answer) without duplicating
+   content or paying double consolidation cost. Tag pointers `wiki-ref` plus
+   topic tags so page-scoped Hindsight features (e.g. Knowledge Pages tag
+   groups) can consume them. If a page is later archived/moved/renamed,
+   invalidate its stale pointer (`PATCH /memories/{id}`) — recall-verified.
    If Hindsight is down (health check fails), queue the retain text in
    `$WIKI/raw/.pending-retains.md` and retry next session. *Done when:*
    retain confirmed (or queued).
@@ -110,8 +118,20 @@ existing pages.
 - Hindsight retain confirmed or queued with a reason
 - Report lists every file touched — none unaccounted for
 
+## L2 ↔ L3 integration patterns (Hindsight × LLM Wiki research, Aug 2026)
+
+This skill implements Pattern 1 of four; know the others to know when to escalate:
+
+1. **Pointer retention (this skill's default).** Full content → wiki (L3), one tagged pointer → Hindsight (L2). Hindsight's recall (TEMPR: semantic + BM25 + graph + temporal, cross-encoder reranked) finds the pointer; the wiki holds the knowledge. Cleanest separation, lowest LLM cost.
+2. **Wiki as Hindsight raw layer.** For high-value curated corpora, also push wiki pages through Hindsight's documents API — gaining temporal queries, entity multi-hop traversal, and automatic contradiction reconciliation across pages (a static wiki keeps contradictions "a paragraph apart"; Hindsight consolidation resolves them into observations with evidence quotes). Use sparingly: every retained token is extracted, consolidated, and reranked forever.
+3. **Dual-store role separation.** At query time, route: question maps to a known wiki page → read the page (index-first, deterministic); temporal / personal / entity-relational question → `hindsight_recall`/`reflect`. Ingest writes to both stores per this skill; queries pick by shape.
+4. **Knowledge Pages (Hindsight ≥ v0.9) — the reverse projection.** Hindsight can render its OWN wiki: `hindsight fs mount --bank <bank>` projects self-updating markdown pages (built from consolidated observations only, delta-edited on each consolidation, never reading sibling pages). A page is a projected view over memory — delete it and it re-projects from facts. Not a replacement for this skill's curated wiki: raw sources stay the truth about *what was said*; knowledge pages are the reconciled truth about *what holds*. Useful as an auto-maintained companion view of a bank's operational memory.
+
 ## References
 
 - `references/extraction-ladder.md` — per-format extraction commands and rung decision rules
 - `scripts/capture_raw.py` — capture helper: frontmatter, sha256, drift detection
 - `llm-wiki` skill — wiki structure, SCHEMA templates, lint procedure
+- Hindsight docs — [Knowledge Pages](https://hindsight.vectorize.io/developer/knowledge-pages) and [Knowledge Pages API](https://hindsight.vectorize.io/developer/api/knowledge-pages) (v0.9): projection model, `hindsight fs mount`, default trigger
+- Latimer et al., [Hindsight is 20/20](https://arxiv.org/abs/2512.12818) (arXiv:2512.12818) — retain/recall/reflect architecture, TEMPR retrieval, 91.4% LongMemEval
+- Karpathy, [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) (Apr 2026) — compile-once vs RAG-per-query, index-first scaling

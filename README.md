@@ -56,6 +56,17 @@ python3 scripts/capture_raw.py --wiki ~/wiki --title "Doc Title" \
 6. **Retain L2 pointer** — episode metadata via `hindsight_retain`
 7. **Report** — every file created/updated
 
+## How this maps to Hindsight (Aug 2026 research)
+
+The "content to L3, pointer to L2" rule is Pattern 1 of four Hindsight × LLM Wiki integration patterns:
+
+1. **Pointer retention** (this skill) — Hindsight's recall (semantic + BM25 + entity-graph + temporal, cross-encoder reranked) finds the pointer; the wiki holds the knowledge. Cheapest, cleanest separation.
+2. **Wiki as Hindsight raw layer** — push wiki pages through Hindsight's documents API to gain temporal queries, entity multi-hop traversal, and automatic contradiction reconciliation. High-value corpora only.
+3. **Dual-store query routing** — known page → read the wiki; temporal/personal/entity question → `hindsight_recall`/`reflect`.
+4. **Knowledge Pages (Hindsight ≥ v0.9)** — the reverse projection: `hindsight fs mount` renders self-updating markdown pages built from consolidated observations. A page is a view over memory, not storage — it re-projects rather than rots. A companion to, not replacement for, the curated wiki.
+
+See [SKILL.md](SKILL.md) § "L2 ↔ L3 integration patterns" for details and sources (Hindsight Knowledge Pages docs, arXiv:2512.12818, Karpathy's LLM Wiki gist).
+
 ## License
 
 MIT
