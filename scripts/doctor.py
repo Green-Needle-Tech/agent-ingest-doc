@@ -5,12 +5,16 @@ Checks:
   1. Python version (>= 3.10)
   2. Writable wiki path
   3. SCHEMA.md present in wiki
-  4. Hindsight health (localhost:8888)
+  4. Hindsight health (default http://localhost:8888, or $HINDSIGHT_URL)
   5. Extraction tools: pymupdf4llm, docling, marker, tesseract
-  6. llm-wiki skill present in ~/.hermes/skills/
+  6. llm-wiki skill present in the Hermes skills directory
+
+Defaults are host-portable (no hardcoded /root): wiki = $WIKI_PATH or
+<real home>/wiki; Hermes skills = <hermes home>/skills where hermes home =
+$HERMES_HOME or <real home>/.hermes — see hermes_paths.py.
 
 Usage:
-  python3 scripts/doctor.py [--wiki ~/wiki] [--hindsight-url http://localhost:8888]
+  python3 scripts/doctor.py [--wiki PATH] [--hindsight-url URL]
   Exit 0 = all pass, 1 = any fail/warn.
 """
 import argparse
@@ -22,6 +26,9 @@ import sys
 from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hermes_paths import default_hindsight_url, default_wiki, hermes_home  # noqa: E402
 
 PY_MIN = (3, 10)
 
@@ -88,20 +95,21 @@ def check_python_pkg(name: str):
 
 
 def check_llm_wiki_skill():
+    skills_root = hermes_home() / "skills"
     skill_paths = [
-        Path.home() / ".hermes" / "skills" / "research" / "llm-wiki",
-        Path.home() / ".hermes" / "skills" / "llm-wiki",
+        skills_root / "research" / "llm-wiki",
+        skills_root / "llm-wiki",
     ]
     for p in skill_paths:
         if p.is_dir():
             return True, f"llm-wiki skill at {p}"
-    return False, "llm-wiki skill not found in ~/.hermes/skills/"
+    return False, f"llm-wiki skill not found under {skills_root}"
 
 
 def main():
     ap = argparse.ArgumentParser(description="doc-ingest health check")
-    ap.add_argument("--wiki", default="~/wiki")
-    ap.add_argument("--hindsight-url", default="http://localhost:8888")
+    ap.add_argument("--wiki", default=str(default_wiki()))
+    ap.add_argument("--hindsight-url", default=default_hindsight_url())
     ap.add_argument("--json", action="store_true", dest="as_json")
     args = ap.parse_args()
 

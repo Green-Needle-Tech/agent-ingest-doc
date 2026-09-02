@@ -5,6 +5,7 @@ Run: python3 -m pytest tests/ -q   (or ./tests/run_tests.sh for stdlib fallback)
 Each test drives the script as a subprocess — the exact consumer path.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -470,3 +471,89 @@ def test_doctor_runs(tmp_path):
     assert "checks" in out
     assert isinstance(out["checks"], list)
     assert len(out["checks"]) > 0
+
+
+# ---------- v2.5.0: hermes_paths.py ----------
+
+HERMES_PATHS = REPO / "scripts" / "hermes_paths.py"
+
+
+def _run_paths_module(env_overrides: dict | None = None):
+    """Import hermes_paths under a clean env and return the module object."""
+    import importlib
+    env = dict(os.environ)
+    for k in ("HERMES_HOME", "HERMES_REAL_HOME", "WIKI_PATH", "HINDSIGHT_URL"):
+        env.pop(k, None)
+    if env_overrides:
+        env.update(env_overrides)
+    code = (
+        "import os, sys, importlib.util; "
+        "os.environ.update({!r}); "
+        "spec = importlib.util.spec_from_file_location('hp', {!r}); "
+        "m = importlib.util.module_from_spec(spec); "
+        "spec.loader.exec_module(m); "
+        "import json; "
+        "print(json.dumps({{'real': str(m.real_home()), "
+        "'hermes': str(m.hermes_home()), "
+        "'wiki': str(m.default_wiki()), "
+        "'hindsight': m.default_hindsight_url()}}))"
+    ).format(env, str(HERMES_PATHS))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert r.returncode == 0, f"hermes_paths import failed: {r.stderr}"
+    return json.loads(r.stdout)
+
+
+def test_hermes_paths_real_home_via_pwd(monkeypatch=None):
+    """real_home falls back to the pwd database when HOME is a profile home."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        profile_home = f"{tmpdir}/.hermes/home"
+        os.makedirs(profile_home, exist_ok=True)
+        result = _run_paths_module({
+            "HERMES_HOME": f"{tmpdir}/.hermes",
+            "HOME": profile_home,
+        })
+        # HERMES_REAL_HOME is unset, HOME = profile home — should fall back to pwd
+        # which on the test runner is the real account home
+        import pwd
+        expected = pwd.getpwuid(os.getuid()).pw_dir
+        assert result["real"] == expected
+
+
+def test_hermes_paths_real_home_explicit():
+    """HERMES_REAL_HOME takes priority over everything."""
+    result = _run_paths_module({"HERMES_REAL_HOME": "/home/ubuntu"})
+    assert result["real"] == "/home/ubuntu"
+    assert result["hermes"] == "/home/ubuntu/.hermes"
+    assert result["wiki"] == "/home/ubuntu/wiki"
+
+
+def test_hermes_paths_hermes_home_env():
+    """HERMES_HOME env overrides the .hermes path."""
+    result = _run_paths_modules() if False else _run_paths_module({
+        "HERMES_REAL_HOME": "/home/testuser",
+        "HERMES_HOME": "/custom/hermes",
+    })
+    assert result["hermes"] == "/custom/hermes"
+
+
+def test_hermes_paths_wiki_env():
+    """WIKI_PATH env overrides the default wiki location."""
+    result = _run_paths_module({
+        "WIKI_PATH": "/data/mywiki",
+    })
+    assert result["wiki"] == "/data/mywiki"
+
+
+def test_hermes_paths_hindsight_url_env():
+    """HINDSIGHT_URL env overrides the default URL."""
+    result = _run_paths_module({
+        "HINDSIGHT_URL": "http://hindsight.local:9999",
+    })
+    assert result["hindsight"] == "http://hindsight.local:9999"
+
+
+def test_hermes_paths_hindsight_url_default():
+    """Default Hindsight URL when env is unset."""
+    result = _run_paths_module()
+    assert result["hindsight"] == "http://localhost:8888"

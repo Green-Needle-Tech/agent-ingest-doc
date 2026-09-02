@@ -57,8 +57,22 @@ git clone https://github.com/Green-Needle-Tech/agent-ingest-doc.git ~/.hermes/sk
 Bootstrap a new wiki (no `llm-wiki` skill required):
 
 ```bash
-python3 ~/.hermes/skills/research/doc-ingest/scripts/init_wiki.py --wiki ~/wiki
-python3 ~/.hermes/skills/research/doc-ingest/scripts/doctor.py --wiki ~/wiki
+python3 ~/.hermes/skills/research/doc-ingest/scripts/init_wiki.py
+python3 ~/.hermes/skills/research/doc-ingest/scripts/doctor.py
+```
+
+Both scripts auto-resolve paths — no hardcoded `/root`. The wiki defaults to
+`$WIKI_PATH` or `<real home>/wiki`; Hindsight defaults to `$HINDSIGHT_URL` or
+`http://localhost:8888`; the Hermes skills directory is resolved from
+`$HERMES_HOME` or `<real home>/.hermes`. This makes the skill portable across
+hosts where Hermes runs under a different OS user (e.g. `/home/ubuntu`).
+
+Set environment variables to override:
+
+```bash
+export WIKI_PATH=/data/mywiki
+export HINDSIGHT_URL=http://hindsight.local:9999
+export HERMES_HOME=/home/ubuntu/.hermes   # or let it auto-resolve
 ```
 
 ## Usage
@@ -92,7 +106,7 @@ max-version allocation for gapped chains). Validates metadata inputs
 a safe pattern, uses atomic writes, and generates Unicode-safe slugs:
 
 ```bash
-python3 scripts/capture_raw.py --wiki ~/wiki --title "Doc Title" \
+python3 scripts/capture_raw.py --title "Doc Title" \
   --source-url https://example.com/doc < extracted.txt
 ```
 
@@ -103,8 +117,8 @@ separate version chains (drift versions within one chain are valid),
 index.md page total vs. disk, and log.md entry format. Exit 0 = pass:
 
 ```bash
-python3 scripts/verify_raw.py --wiki ~/wiki        # human-readable
-python3 scripts/verify_raw.py --wiki ~/wiki --json # machine-readable
+python3 scripts/verify_raw.py        # human-readable
+python3 scripts/verify_raw.py --json # machine-readable
 ```
 
 `scripts/safe_fetch.py` (stdlib-only) enforces SSRF protections before
@@ -118,18 +132,27 @@ python3 scripts/safe_fetch.py https://example.com/doc --json  # metadata only
 ```
 
 `scripts/doctor.py` checks all dependencies — Python version, wiki path,
-SCHEMA.md, Hindsight health, extraction tools, llm-wiki skill:
+SCHEMA.md, Hindsight health, extraction tools, llm-wiki skill. Paths are
+auto-resolved (see `scripts/hermes_paths.py`):
 
 ```bash
-python3 scripts/doctor.py --wiki ~/wiki
+python3 scripts/doctor.py
+python3 scripts/doctor.py --wiki /custom/wiki --hindsight-url http://h.host:9999
 ```
+
+`scripts/hermes_paths.py` (stdlib-only) resolves host-portable defaults:
+real home (`HERMES_REAL_HOME` → `HOME` → pwd database, skipping Hermes
+profile-home sandboxes), Hermes home (`HERMES_HOME`), default wiki
+(`$WIKI_PATH`), and default Hindsight URL (`$HINDSIGHT_URL`). All other
+scripts import this module for their `--wiki` default.
 
 `scripts/init_wiki.py` bootstraps a new wiki from `templates/` — creates
 the directory structure and copies SCHEMA.md, index.md, log.md (won't
 overwrite existing files):
 
 ```bash
-python3 scripts/init_wiki.py --wiki ~/wiki
+python3 scripts/init_wiki.py
+python3 scripts/init_wiki.py --wiki /custom/wiki
 ```
 
 ### Tests

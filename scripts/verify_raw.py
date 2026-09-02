@@ -20,7 +20,7 @@ Checks (wiki navigation, when present):
      prefix format
 
 Usage:
-  verify_raw.py --wiki ~/wiki [--json]
+  verify_raw.py --wiki <wiki-root> [--json]
 Exit 0 = all checks pass; 1 = failures (also printed).
 """
 import argparse
@@ -29,6 +29,9 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hermes_paths import default_wiki  # noqa: E402
 
 PAGE_DIRS = ("entities", "concepts", "comparisons", "queries")
 LOG_PREFIX_RE = re.compile(r"^## \[\d{4}-\d{2}-\d{2}\] [^|]+\|")
@@ -140,7 +143,8 @@ def check_log_format(wiki: Path, failures: list):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--wiki", default="~/wiki")
+    ap.add_argument("--wiki", default=str(default_wiki()),
+                    help="wiki root (default: $WIKI_PATH or <real home>/wiki)")
     ap.add_argument("--json", action="store_true", dest="as_json")
     args = ap.parse_args()
 

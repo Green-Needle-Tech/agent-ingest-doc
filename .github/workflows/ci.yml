@@ -40,7 +40,7 @@ jobs:
           python-version: "3.12"
       - name: Compile check (all scripts stdlib-only, no deps)
         run: |
-          python -m py_compile scripts/capture_raw.py scripts/verify_raw.py scripts/safe_fetch.py scripts/doctor.py scripts/init_wiki.py
+          python -m py_compile scripts/capture_raw.py scripts/verify_raw.py scripts/safe_fetch.py scripts/doctor.py scripts/init_wiki.py scripts/hermes_paths.py
           python scripts/capture_raw.py --help > /dev/null
           python scripts/verify_raw.py --help > /dev/null
           python scripts/safe_fetch.py --help > /dev/null

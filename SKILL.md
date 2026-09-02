@@ -1,7 +1,7 @@
 ---
 name: doc-ingest
 description: "Use when ingesting docs into the wiki and Hindsight memory."
-version: 2.4.0
+version: 2.5.0
 author: David (david6055my), Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -31,13 +31,16 @@ memory (Hindsight auto-retain handles that).
 
 ## Prerequisites
 
-- Wiki at `$WIKI_PATH` (default `~/wiki`) — orient first; if absent, run
-  `scripts/init_wiki.py --wiki ~/wiki` to bootstrap from templates, or
-  initialize per the `llm-wiki` skill for a custom schema
+- Wiki at `$WIKI_PATH` (default `<real home>/wiki` — resolved via
+  `HERMES_REAL_HOME` → `HOME` → pwd database, skipping Hermes profile-home
+  sandboxes; see `scripts/hermes_paths.py`) — orient first; if absent, run
+  `scripts/init_wiki.py` to bootstrap from templates, or initialize per
+  the `llm-wiki` skill for a custom schema
 - Hindsight at `$HINDSIGHT_URL` (default `http://localhost:8888`), bank `main`
 - Extraction tools: `pymupdf` (rung 1); `docling`/`marker` if installed (rung 2);
   `tesseract`/`pdftoppm` or `vision_analyze` for OCR (rung 3)
-- Run `scripts/doctor.py --wiki ~/wiki` to verify all dependencies
+- Run `scripts/doctor.py` to verify all dependencies (wiki path and Hindsight
+  URL are auto-resolved from `$WIKI_PATH` / `$HINDSIGHT_URL` or the real home)
 
 ## Procedure
 
@@ -194,6 +197,7 @@ This skill implements Pattern 1 of four; know the others to know when to escalat
 - `scripts/verify_raw.py` — post-ingest lint: hash round-trip, source_url chain-aware duplicate detection, index/log format
 - `scripts/safe_fetch.py` — stdlib URL fetcher with SSRF protections (scheme validation, private/metadata IP blocking, redirect revalidation, credential stripping, byte/timeout caps)
 - `scripts/doctor.py` — dependency health check (Python, wiki path, SCHEMA.md, Hindsight, extraction tools, llm-wiki skill)
+- `scripts/hermes_paths.py` — host-portable path resolution: real home (`HERMES_REAL_HOME` → `HOME` → pwd), Hermes home (`HERMES_HOME`), default wiki (`WIKI_PATH`), default Hindsight URL (`HINDSIGHT_URL`) — no hardcoded `/root`
 - `scripts/init_wiki.py` — wiki bootstrap: creates directory structure from `templates/` (SCHEMA.md, index.md, log.md)
 - `templates/` — SCHEMA.md, index.md, log.md starter templates for a new wiki
 - `tests/test_capture_raw.py` — test suite driving capture, verify, and new scripts end-to-end

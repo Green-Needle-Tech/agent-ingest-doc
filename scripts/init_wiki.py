@@ -5,7 +5,7 @@ Creates the wiki directory structure and copies template files.
 Safe to re-run — will not overwrite existing files.
 
 Usage:
-  python3 scripts/init_wiki.py [--wiki ~/wiki]
+  python3 scripts/init_wiki.py [--wiki PATH]
   Exit 0 = ready, 1 = error.
 """
 import argparse
@@ -13,6 +13,9 @@ import json
 import shutil
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hermes_paths import default_wiki  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO / "templates"
@@ -31,7 +34,8 @@ WIKI_DIRS = [
 
 def main():
     ap = argparse.ArgumentParser(description="Initialize a new LLM wiki")
-    ap.add_argument("--wiki", default="~/wiki")
+    ap.add_argument("--wiki", default=str(default_wiki()),
+                    help="wiki root (default: $WIKI_PATH or <real home>/wiki)")
     ap.add_argument("--json", action="store_true", dest="as_json")
     args = ap.parse_args()
 

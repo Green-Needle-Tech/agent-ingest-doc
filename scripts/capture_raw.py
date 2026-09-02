@@ -20,7 +20,7 @@ rather than trusting the frontmatter hash, so a file edited after ingest is
 detected as drift, not falsely reported as unchanged.
 
 Usage:
-  capture_raw.py --wiki ~/wiki --title "Doc Title" --source-url <url-or-path> \
+  capture_raw.py --wiki <wiki-root> --title "Doc Title" --source-url <url-or-path> \
       [--raw-subdir articles|papers|transcripts|assets] [--slug custom-slug] \
       [--stdin | --input-file extracted.txt]
 
@@ -39,6 +39,9 @@ import sys
 import tempfile
 import unicodedata
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hermes_paths import default_wiki  # noqa: E402
 
 RAW_SUBDIRS = ("articles", "papers", "transcripts", "assets")
 VERSION_RE = re.compile(r"^(?P<slug>.*)-v(?P<num>\d+)$")
@@ -300,7 +303,8 @@ def atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--wiki", default="~/wiki")
+    ap.add_argument("--wiki", default=str(default_wiki()),
+                    help="wiki root (default: $WIKI_PATH or <real home>/wiki)")
     ap.add_argument("--title", required=True)
     ap.add_argument("--source-url", required=True)
     ap.add_argument("--raw-subdir", default="articles", choices=list(RAW_SUBDIRS))

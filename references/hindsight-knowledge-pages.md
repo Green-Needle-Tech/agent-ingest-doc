@@ -4,8 +4,9 @@ Grounded in the official docs
 ([concepts](https://hindsight.vectorize.io/developer/knowledge-pages),
 [API](https://hindsight.vectorize.io/developer/api/knowledge-pages)) and
 **live-verified against a self-managed v0.9.1 instance on 2026-08-23**.
-All endpoints relative to `http://localhost:8888/v1/default/banks/{bank_id}`
-(default bank: `main`). Check yours: `curl -s $HINDSIGHT_URL/api/version`.
+All endpoints relative to `$HINDSIGHT_URL/v1/default/banks/{bank_id}`
+(default URL: `http://localhost:8888`, default bank: `main`).
+Check yours: `curl -s $HINDSIGHT_URL/api/version`.
 
 ## What a Knowledge Page is
 
