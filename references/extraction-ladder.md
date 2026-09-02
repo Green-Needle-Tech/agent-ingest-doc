@@ -29,6 +29,8 @@ then Python `html.parser`/regex strip (see llm-wiki skill's
 
 **.md / .txt:** copy verbatim.
 
+**EPUB:** `read_file` auto-extracts (or `pandoc file.epub -t markdown`).
+
 **Pasted text:** save directly.
 
 ## Rung 2 — layout models (local, needs pip install + optionally GPU)
@@ -59,6 +61,7 @@ Both run entirely local — no per-page fee, nothing leaves the network.
 | URL | web_extract | browser snapshot (JS-rendered) | — |
 | .docx/.pptx | read_file | — | — |
 | .md/.txt | verbatim copy | — | — |
+| EPUB | read_file / pandoc | — | — |
 
 ## Raw file sizing
 

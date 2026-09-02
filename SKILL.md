@@ -1,7 +1,7 @@
 ---
 name: doc-ingest
 description: "Use when ingesting docs into the wiki and Hindsight memory."
-version: 2.2.0
+version: 2.3.0
 author: David (david6055my), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -49,10 +49,15 @@ memory (Hindsight auto-retain handles that).
    - Rung 2 — layout models: `docling`/`marker` when tables/multi-column break rung 1
    - Rung 3 — OCR/vision: `pdftoppm` + `tesseract` or `vision_analyze` for scans
    Prepend frontmatter (`source_url`, `ingested`, `sha256` of body). Prefer
-   `scripts/capture_raw.py` — it computes the hash and handles re-ingest drift.
+   `scripts/capture_raw.py` — it computes the hash and handles re-ingest
+   drift (matched by slug in the target subdir AND by `source_url` across
+   all raw/ subdirs). Hash scope: the sha256 covers the stored body exactly
+   as written after frontmatter and the `# Title` heading — verify by
+   stripping both and recomputing (see `scripts/verify_raw.py`).
    *Done when:* raw file saved, non-empty body verified, sha256 recorded.
    If the source already exists in `raw/`: identical hash → skip capture,
-   update pages only; different hash → flag drift to user, save as `-v2`.
+   update pages only; different hash → flag drift to user, save as `-vN`
+   (original unsuffixed file is v1, first drift is `-v2`, next `-v3`).
 3. **Check coverage.** `search_files` across `entities/ concepts/ comparisons/`
    for mentioned entities. Apply the wiki's Page Thresholds (2+ source mentions
    or central to one source). *Done when:* you have a create-vs-update list.
@@ -113,11 +118,20 @@ existing pages.
 
 ## Verification
 
-- Raw file exists, body non-empty, sha256 in frontmatter matches recomputed hash
+Run `scripts/verify_raw.py --wiki $WIKI` after each ingest — it checks
+executable form of this whole section:
+
+- Raw file exists, body non-empty, sha256 in frontmatter matches the
+  recomputed hash of the stored body (frontmatter + title heading stripped)
+- source_url present; no duplicate source_url across raw/ subdirs
 - Every new/updated page appears in `index.md`; index total == files on disk
 - Log entry appended with the parseable prefix format
-- Hindsight retain confirmed or queued with a reason
+- Hindsight retain confirmed or queued with a reason (manual step)
 - Report lists every file touched — none unaccounted for
+
+`verify_raw.py` exits 0 on pass, 1 on failure; `--json` for machine-readable
+output. Tests: `tests/test_capture_raw.py` (17 tests, `python3 -m pytest
+tests/ -q` or `tests/run_tests.sh` stdlib fallback).
 
 ## L2 ↔ L3 integration patterns (Hindsight × LLM Wiki research, Aug 2026)
 
@@ -133,7 +147,9 @@ This skill implements Pattern 1 of four; know the others to know when to escalat
 
 - `references/extraction-ladder.md` — per-format extraction commands and rung decision rules
 - `references/hindsight-knowledge-pages.md` — Knowledge Pages API surface + v0.9.1 verified-behavior notes (live-tested 2026-08-23)
-- `scripts/capture_raw.py` — capture helper: frontmatter, sha256, drift detection
+- `scripts/capture_raw.py` — capture helper: frontmatter, sha256, drift detection, cross-subdir dedupe, `--slug` override
+- `scripts/verify_raw.py` — post-ingest lint: hash round-trip, source_url presence/dupes, index/log format
+- `tests/test_capture_raw.py` — 17-test suite driving both scripts end-to-end
 - `llm-wiki` skill — wiki structure, SCHEMA templates, lint procedure
 - Hindsight docs — [Knowledge Pages](https://hindsight.vectorize.io/developer/knowledge-pages) and [Knowledge Pages API](https://hindsight.vectorize.io/developer/api/knowledge-pages) (v0.9): projection model, `hindsight fs mount`, default trigger
 - Latimer et al., [Hindsight is 20/20](https://arxiv.org/abs/2512.12818) (arXiv:2512.12818) — retain/recall/reflect architecture, TEMPR retrieval, 91.4% LongMemEval

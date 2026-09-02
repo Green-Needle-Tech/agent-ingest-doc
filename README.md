@@ -47,7 +47,7 @@ Query-time routing (dual-store, Pattern 3): known page → read the wiki directl
 
 ```bash
 mkdir -p ~/.hermes/skills/research
-git clone https://github.com/david6055my/agent-ingest-doc.git ~/.hermes/skills/research/doc-ingest
+git clone https://github.com/Green-Needle-Tech/agent-ingest-doc.git ~/.hermes/skills/research/doc-ingest
 ```
 
 ## Usage
@@ -70,16 +70,36 @@ PDF-parsing benchmarks):
 2. **Layout models** — `docling` (tables/multi-column) or `marker` (GPU speed) when rung 1 output is scrambled.
 3. **OCR/vision** — `pdftoppm` + `tesseract`, or a vision model, for scans and photos.
 
-### Helper script
+### Helper scripts
 
 `scripts/capture_raw.py` (stdlib-only) writes the raw file with `source_url` /
-`ingested` / `sha256` frontmatter and detects re-ingest drift
-(identical → skip; changed → flag + version bump):
+`ingested` / `sha256` frontmatter and detects re-ingest drift — matched by
+slug in the target subdir AND by `source_url` across all raw/ subdirs
+(identical → skip; changed → flag + version bump `-v2`, `-v3`, …):
 
 ```bash
 python3 scripts/capture_raw.py --wiki ~/wiki --title "Doc Title" \
   --source-url https://example.com/doc < extracted.txt
 ```
+
+`scripts/verify_raw.py` (stdlib-only) lints the wiki after an ingest — the
+executable form of the skill's Verification section: hash round-trip on every
+raw file, `source_url` presence and cross-subdir duplicates, `index.md` page
+total vs. disk, and `log.md` entry format. Exit 0 = pass:
+
+```bash
+python3 scripts/verify_raw.py --wiki ~/wiki        # human-readable
+python3 scripts/verify_raw.py --wiki ~/wiki --json # machine-readable
+```
+
+### Tests
+
+```bash
+python3 -m pytest tests/ -q   # 17 tests, both scripts end-to-end
+tests/run_tests.sh           # stdlib fallback, no pytest needed
+```
+
+CI runs the suite on Python 3.10 and 3.12 on every push and PR.
 
 ## Workflow
 
