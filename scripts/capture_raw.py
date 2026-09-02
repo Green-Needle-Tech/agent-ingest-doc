@@ -309,10 +309,16 @@ def main():
     ap.add_argument("--input-file")
     ap.add_argument("--version-suffix", default="",
                     help="override the version suffix (default: auto -vN on drift)")
+    ap.add_argument("--extractor", default="",
+                    help="extractor name (e.g. pymupdf4llm, docling, web_extract, manual)")
+    ap.add_argument("--source-kind", default="url",
+                    choices=["url", "file", "paste"],
+                    help="source type (default: url)")
     args = ap.parse_args()
 
     # Validate metadata inputs before any filesystem work
     validate_no_control_chars(args.source_url, "source-url")
+    validate_no_control_chars(args.extractor, "extractor")
     validate_suffix(args.version_suffix)
     title = validate_title(args.title)
 
@@ -368,6 +374,23 @@ def main():
         f"# {title}\n\n"
     )
     atomic_write(out, front + body)
+
+    # Write manifest sidecar with extraction metadata
+    manifest_path = out.with_suffix(".json")
+    manifest = {
+        "schema_version": 1,
+        "source_uri": args.source_url,
+        "source_kind": args.source_kind,
+        "retrieved_at": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(),
+        "extraction_sha256": sha,
+        "extractor": args.extractor or "unknown",
+        "raw_file": out.name,
+    }
+    if prev_file is not None:
+        manifest["parent_version"] = str(prev_file)
+    if out.exists():
+        atomic_write(manifest_path, json.dumps(manifest, indent=2))
 
     result = {
         "status": "drift" if prev_file is not None else "captured",

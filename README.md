@@ -96,6 +96,31 @@ python3 scripts/verify_raw.py --wiki ~/wiki        # human-readable
 python3 scripts/verify_raw.py --wiki ~/wiki --json # machine-readable
 ```
 
+`scripts/safe_fetch.py` (stdlib-only) enforces SSRF protections before
+fetching URLs — scheme validation (http/https only), blocks loopback/private/
+link-local/metadata IPs, strips credentials, caps redirects/bytes/timeouts,
+revalidates redirect destinations:
+
+```bash
+python3 scripts/safe_fetch.py https://example.com/doc    # prints content
+python3 scripts/safe_fetch.py https://example.com/doc --json  # metadata only
+```
+
+`scripts/doctor.py` checks all dependencies — Python version, wiki path,
+SCHEMA.md, Hindsight health, extraction tools, llm-wiki skill:
+
+```bash
+python3 scripts/doctor.py --wiki ~/wiki
+```
+
+`scripts/init_wiki.py` bootstraps a new wiki from `templates/` — creates
+the directory structure and copies SCHEMA.md, index.md, log.md (won't
+overwrite existing files):
+
+```bash
+python3 scripts/init_wiki.py --wiki ~/wiki
+```
+
 ### Tests
 
 ```bash

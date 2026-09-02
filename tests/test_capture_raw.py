@@ -331,3 +331,142 @@ def test_verify_index_total_mismatch(tmp_path):
     rc, out = run_verify(tmp_path)
     assert rc == 1
     assert any("Total pages" in f for f in out["failures"])
+
+
+# ---------- v2.4.0: manifest sidecar ----------
+
+def test_manifest_sidecar_created(tmp_path):
+    """capture_raw.py writes a JSON manifest sidecar with extraction metadata."""
+    rc, objs, _ = run_capture(tmp_path, "Manifest Test", "https://m.test",
+                              extra=["--extractor", "pymupdf4llm",
+                                     "--source-kind", "url"])
+    assert rc == 0
+    manifest_path = Path(objs[0]["file"]).with_suffix(".json")
+    assert manifest_path.is_file(), f"Manifest not found: {manifest_path}"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["schema_version"] == 1
+    assert manifest["source_uri"] == "https://m.test"
+    assert manifest["source_kind"] == "url"
+    assert manifest["extractor"] == "pymupdf4llm"
+    assert "extraction_sha256" in manifest
+    assert "retrieved_at" in manifest
+
+
+def test_manifest_default_extractor(tmp_path):
+    """Manifest defaults to 'unknown' extractor when --extractor not given."""
+    rc, objs, _ = run_capture(tmp_path, "Def Test", "https://d.test")
+    assert rc == 0
+    manifest_path = Path(objs[0]["file"]).with_suffix(".json")
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["extractor"] == "unknown"
+    assert manifest["source_kind"] == "url"
+
+
+# ---------- v2.4.0: safe_fetch.py ----------
+
+SAFE_FETCH = REPO / "scripts" / "safe_fetch.py"
+
+
+def test_safe_fetch_rejects_file_scheme(tmp_path):
+    """safe_fetch.py rejects file:// URLs."""
+    r = subprocess.run(
+        [sys.executable, str(SAFE_FETCH), "file:///etc/passwd", "--json"],
+        capture_output=True, text=True)
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["status"] == "error"
+    assert "scheme" in out["error"].lower()
+
+
+def test_safe_fetch_rejects_ftp_scheme():
+    """safe_fetch.py rejects ftp:// URLs."""
+    r = subprocess.run(
+        [sys.executable, str(SAFE_FETCH), "ftp://example.com/file", "--json"],
+        capture_output=True, text=True)
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert out["status"] == "error"
+    assert "scheme" in out["error"].lower()
+
+
+def test_safe_fetch_rejects_empty_url():
+    """safe_fetch.py rejects empty URLs."""
+    r = subprocess.run(
+        [sys.executable, str(SAFE_FETCH), "", "--json"],
+        capture_output=True, text=True)
+    assert r.returncode == 1
+
+
+def test_safe_fetch_rejects_loopback():
+    """safe_fetch.py rejects loopback addresses."""
+    r = subprocess.run(
+        [sys.executable, str(SAFE_FETCH),
+         "http://127.0.0.1:8888/health", "--json"],
+        capture_output=True, text=True)
+    assert r.returncode == 1
+    out = json.loads(r.stdout)
+    assert "blocked" in out["error"].lower() or "error" in out["error"].lower()
+
+
+# ---------- v2.4.0: init_wiki.py ----------
+
+INIT_WIKI = REPO / "scripts" / "init_wiki.py"
+
+
+def test_init_wiki_creates_structure(tmp_path):
+    """init_wiki.py creates the full wiki directory structure."""
+    wiki = tmp_path / "test-wiki"
+    r = subprocess.run(
+        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki), "--json"],
+        capture_output=True, text=True)
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["status"] == "ok"
+    # Check directories exist
+    for d in ["raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
+              "entities", "concepts", "comparisons", "queries"]:
+        assert (wiki / d).is_dir(), f"Missing dir: {d}"
+    # Check template files exist
+    for f in ["SCHEMA.md", "index.md", "log.md"]:
+        assert (wiki / f).is_file(), f"Missing file: {f}"
+
+
+def test_init_wiki_idempotent(tmp_path):
+    """init_wiki.py is safe to re-run — won't overwrite existing files."""
+    wiki = tmp_path / "test-wiki"
+    # First run
+    subprocess.run(
+        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki), "--json"],
+        capture_output=True, text=True)
+    # Modify a file
+    schema = wiki / "SCHEMA.md"
+    original = schema.read_text()
+    schema.write_text("# Custom Schema\n")
+    # Second run
+    r = subprocess.run(
+        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki), "--json"],
+        capture_output=True, text=True)
+    assert r.returncode == 0
+    # Custom content preserved
+    assert schema.read_text() == "# Custom Schema\n"
+
+
+# ---------- v2.4.0: doctor.py ----------
+
+DOCTOR = REPO / "scripts" / "doctor.py"
+
+
+def test_doctor_runs(tmp_path):
+    """doctor.py runs and produces valid JSON output."""
+    r = subprocess.run(
+        [sys.executable, str(DOCTOR), "--wiki", str(tmp_path / "wiki"),
+         "--json"],
+        capture_output=True, text=True)
+    assert r.returncode in (0, 1)  # may have warnings
+    out = json.loads(r.stdout)
+    assert "total" in out
+    assert "passed" in out
+    assert "failed" in out
+    assert "checks" in out
+    assert isinstance(out["checks"], list)
+    assert len(out["checks"]) > 0
