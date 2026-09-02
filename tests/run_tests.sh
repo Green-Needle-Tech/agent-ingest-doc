@@ -23,7 +23,7 @@ out=$(echo "$BODY v2" | python3 scripts/capture_raw.py --wiki "$TMP" --title "Sm
 check "drift single JSON" '"status": "drift"' "$out"
 lines=$(echo "$out" | grep -c '"status"')
 check "drift exactly one JSON line" '^1$' "$lines"
-out=$(echo "$BODY" | python3 scripts/verify_raw.py --wiki "$TMP" --json)
-check "verify clean" '"status": "ok"' "$out"
+out=$(python3 scripts/verify_raw.py --wiki "$TMP" --json)
+check "verify after drift (chain URLs valid)" '"status": "ok"' "$out"
 if [[ "$fail" -eq 0 ]]; then echo "ALL SMOKE CHECKS PASSED"; fi
 exit "$fail"

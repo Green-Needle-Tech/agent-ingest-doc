@@ -26,8 +26,16 @@ def run_capture(wiki, title, url, body=BODY, extra=None, stdin=None):
     r = subprocess.run(cmd, input=body if stdin is None else stdin,
                        capture_output=True, text=True)
     lines = [ln for ln in r.stdout.strip().splitlines() if ln.strip()]
-    return r.returncode, [json.loads(ln) for ln in lines], r.stderr
+    objs = []
+    for ln in lines:
+        try:
+            objs.append(json.loads(ln))
+        except json.JSONDecodeError:
+            pass
+    return r.returncode, objs, r.stderr
 
+
+# ---------- capture_raw.py: existing tests ----------
 
 def test_first_capture(tmp_path):
     rc, objs, _ = run_capture(tmp_path, "Test Doc", "https://example.com/a")
@@ -112,7 +120,7 @@ def test_slug_override(tmp_path):
 
 
 def test_cross_subdir_dedupe_unchanged(tmp_path):
-    """Same URL + same content in a different subdir → unchanged, not a duplicate."""
+    """Same URL + same content in a different subdir -> unchanged, not a duplicate."""
     run_capture(tmp_path, "Doc A", "https://example.com/same")
     rc, objs, _ = run_capture(tmp_path, "Doc B", "https://example.com/same",
                               extra=["--raw-subdir", "papers"])
@@ -120,7 +128,7 @@ def test_cross_subdir_dedupe_unchanged(tmp_path):
 
 
 def test_cross_subdir_drift_saves_next_to_original(tmp_path):
-    """Same URL, changed content, different subdir → drift saved as -v2 next
+    """Same URL, changed content, different subdir -> drift saved as -v2 next
     to the original, not orphaned in the new subdir."""
     run_capture(tmp_path, "Doc A", "https://example.com/same")
     rc, objs, _ = run_capture(tmp_path, "Doc B", "https://example.com/same",
@@ -137,6 +145,109 @@ def test_version_suffix_override(tmp_path):
     rc, objs, _ = run_capture(tmp_path, "Test Doc", "https://example.com/a",
                              body=BODY + " X", extra=["--version-suffix=-final"])
     assert rc == 0 and objs[0]["file"].endswith("test-doc-final.md")
+
+
+# ---------- capture_raw.py: new tests for v2.3.1 fixes ----------
+
+def test_gapped_version_allocation(tmp_path):
+    """Version allocation uses max, not count — gapped versions get correct next."""
+    run_capture(tmp_path, "Gap Test", "https://gap.test")
+    raw = tmp_path / "raw/articles/gap-test.md"
+    content = raw.read_text()
+    # Manually create v2 and v4 (gap at v3)
+    (tmp_path / "raw/articles/gap-test-v2.md").write_text(
+        content.replace(BODY, BODY + " v2"))
+    (tmp_path / "raw/articles/gap-test-v4.md").write_text(
+        content.replace(BODY, BODY + " v4"))
+    # Next drift should be v5 (max+1), not v4 (count+1=3+1)
+    rc, objs, _ = run_capture(tmp_path, "Gap Test", "https://gap.test",
+                              body=BODY + " v5")
+    assert rc == 0 and objs[0]["status"] == "drift"
+    assert objs[0]["file"].endswith("gap-test-v5.md"), (
+        f"Expected gap-test-v5.md, got {objs[0]['file']}")
+
+
+def test_frontmatter_injection_rejected(tmp_path):
+    """Multiline source_url with control chars must be rejected cleanly."""
+    malicious_url = "https://x.test\nsha256: 0000000000000000000000000000000000000000000000000000000000000000"
+    rc, objs, err = run_capture(tmp_path, "Inject Test", malicious_url)
+    assert rc != 0  # SystemExit
+    # Should not produce a captured file
+    assert not (tmp_path / "raw/articles").exists() or \
+        not list((tmp_path / "raw/articles").glob("*.md"))
+
+
+def test_version_suffix_path_traversal_rejected(tmp_path):
+    """--version-suffix with path traversal chars must be rejected with JSON error."""
+    run_capture(tmp_path, "Suffix Test", "https://s.test")
+    rc, objs, err = run_capture(tmp_path, "Suffix Test", "https://s.test",
+                                body=BODY + " X",
+                                extra=["--version-suffix=../boom"])
+    assert rc != 0  # SystemExit
+
+
+def test_version_suffix_space_rejected(tmp_path):
+    """--version-suffix with spaces must be rejected."""
+    run_capture(tmp_path, "Suffix Test", "https://s.test")
+    rc, objs, err = run_capture(tmp_path, "Suffix Test", "https://s.test",
+                                body=BODY + " X",
+                                extra=["--version-suffix=-foo bar"])
+    assert rc != 0  # SystemExit
+
+
+def test_atomic_write_no_overwrite(tmp_path):
+    """Atomic write refuses to overwrite an existing target."""
+    run_capture(tmp_path, "Atomic Test", "https://a.test")
+    # Try to overwrite by using explicit suffix that matches existing file
+    # The original is atomic-test.md; with --version-suffix='' it should
+    # auto-allocate, but we can test collision by providing an explicit
+    # suffix that creates the same filename
+    rc, objs, err = run_capture(tmp_path, "Atomic Test", "https://a.test",
+                                body=BODY + " OVERWRITE",
+                                extra=["--version-suffix=-v2"])
+    # First time -v2 doesn't exist yet, so this succeeds
+    assert rc == 0 and objs[0]["file"].endswith("atomic-test-v2.md")
+    # Now try again with same suffix - should fail (file exists)
+    rc, objs, err = run_capture(tmp_path, "Atomic Test", "https://a.test",
+                                body=BODY + " OVERWRITE2",
+                                extra=["--version-suffix=-v2"])
+    assert rc != 0  # SystemExit — target exists
+
+
+def test_unicode_slug_cjk(tmp_path):
+    """Pure CJK title should produce a unique slug, not 'untitled'."""
+    rc, objs, _ = run_capture(tmp_path, "東京レポート", "https://jp.test/1")
+    assert rc == 0
+    filename = Path(objs[0]["file"]).name
+    # Should NOT be just "untitled.md" — must have a unique hash suffix
+    assert filename != "untitled.md", f"Pure CJK collapsed to untitled: {filename}"
+    assert filename.startswith("untitled-") or any(
+        ord(c) > 0x2000 for c in filename), f"CJK not preserved: {filename}"
+
+
+def test_unicode_slug_no_collision(tmp_path):
+    """Two different CJK titles must not collide."""
+    rc1, objs1, _ = run_capture(tmp_path, "東京レポート", "https://jp.test/1")
+    rc2, objs2, _ = run_capture(tmp_path, "京都レポート", "https://jp.test/2",
+                                body=BODY + " different")
+    assert rc1 == 0 and rc2 == 0
+    assert objs1[0]["file"] != objs2[0]["file"], (
+        f"Two different CJK titles produced the same filename: "
+        f"{objs1[0]['file']} == {objs2[0]['file']}")
+
+
+def test_dedup_recomputes_stored_hash(tmp_path):
+    """Dedup recomputes stored body hash — a corrupted file is detected as drift."""
+    run_capture(tmp_path, "Corrupt Test", "https://c.test")
+    # Corrupt the stored body but keep frontmatter hash the same
+    raw = tmp_path / "raw/articles/corrupt-test.md"
+    content = raw.read_text()
+    raw.write_text(content.replace("Lorem", "LOREM"), encoding="utf-8")
+    # Re-ingest the ORIGINAL body — should be drift (stored changed), not unchanged
+    rc, objs, _ = run_capture(tmp_path, "Corrupt Test", "https://c.test")
+    assert objs[0]["status"] == "drift", (
+        f"Expected drift after corruption, got {objs[0]['status']} "
+        f"— dedup trusted stale frontmatter hash instead of recomputing")
 
 
 # ---------- verify_raw.py ----------
@@ -175,13 +286,35 @@ def test_verify_detects_missing_source_url(tmp_path):
     assert any("source_url" in f for f in out["failures"])
 
 
-def test_verify_detects_duplicate_source_url(tmp_path):
+def test_verify_drift_chain_passes(tmp_path):
+    """P0 fix: drift versions in one chain share source_url and MUST pass verification."""
+    run_capture(tmp_path, "Test Doc", "https://example.com/a")
+    run_capture(tmp_path, "Test Doc", "https://example.com/a", body=BODY + " X")
+    rc, out = run_verify(tmp_path)
+    assert rc == 0 and out["status"] == "ok", (
+        f"Drift chain failed verification: {out['failures']}")
+    assert out["raw_files_checked"] == 2
+
+
+def test_verify_detects_duplicate_source_url_separate_chains(tmp_path):
+    """Duplicate source_url across SEPARATE chains (different slugs) must fail."""
     run_capture(tmp_path, "Doc A", "https://example.com/same")
-    run_capture(tmp_path, "Doc B", "https://example.com/same",
-                body=BODY + " different", extra=["--raw-subdir", "papers"])
+    # Create a separate chain with a different slug but same URL
+    # by manually writing a file in a different directory
+    papers = tmp_path / "raw/papers"
+    papers.mkdir(parents=True)
+    (papers / "different-slug.md").write_text(
+        "---\n"
+        "source_url: https://example.com/same\n"
+        "ingested: 2026-09-02\n"
+        f"sha256: {__import__('hashlib').sha256(BODY.encode()).hexdigest()}\n"
+        "---\n\n"
+        f"# Different Doc\n\n{BODY}",
+        encoding="utf-8")
     rc, out = run_verify(tmp_path)
     assert rc == 1
-    assert any("duplicate source_url" in f for f in out["failures"])
+    assert any("duplicate source_url" in f for f in out["failures"]), (
+        f"Expected duplicate source_url failure, got: {out['failures']}")
 
 
 def test_verify_detects_bad_log_format(tmp_path):

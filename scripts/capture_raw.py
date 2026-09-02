@@ -9,12 +9,15 @@ after the frontmatter block and the `# Title` heading. To verify, read the
 file, strip frontmatter + heading, and recompute — see scripts/verify_raw.py.
 
 Version convention: the first capture is unsuffixed (implicitly v1). On hash
-drift the next capture is saved as `<slug>-v<N>.md` where N = number of
-existing versions + 1 (so the second version is -v2).
+drift the next capture is saved as `<slug>-v<N>.md` where N = 1 + max(existing
+version numbers) (so the second version is -v2, and gapped chains are handled
+correctly).
 
 Dedup scope: drift/unchanged detection matches by slug within the target
 subdir AND by source_url across ALL raw/ subdirs (same URL ingested into a
-different subdir is still detected).
+different subdir is still detected). Dedup recomputes the stored body hash
+rather than trusting the frontmatter hash, so a file edited after ingest is
+detected as drift, not falsely reported as unchanged.
 
 Usage:
   capture_raw.py --wiki ~/wiki --title "Doc Title" --source-url <url-or-path> \
@@ -30,18 +33,64 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
+import unicodedata
 from pathlib import Path
 
 RAW_SUBDIRS = ("articles", "papers", "transcripts", "assets")
 VERSION_RE = re.compile(r"^(?P<slug>.*)-v(?P<num>\d+)$")
+SUFFIX_RE = re.compile(r"^-[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}$")
 MIN_BODY_CHARS = 50
 
 
 def slugify(title: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    return s[:80] or "untitled"
+    """Unicode-safe slugify: normalizes, keeps CJK/alphanumeric, hyphenates."""
+    s = unicodedata.normalize("NFKC", title).lower()
+    s = re.sub(r"[^\w\-]+", "-", s, flags=re.UNICODE)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    s = s[:80]
+    if s:
+        return s
+    # All non-word characters (e.g. pure CJK that \w doesn't cover in some
+    # Python builds) — fall back to a short hash of the title for uniqueness.
+    return "untitled-" + hashlib.sha256(title.encode("utf-8")).hexdigest()[:8]
+
+
+def validate_no_control_chars(value: str, field_name: str) -> str:
+    """Reject newlines and control characters in metadata fields."""
+    if not value:
+        return value
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise SystemExit(
+            f"error: --{field_name} must not contain control characters "
+            f"or newlines (got {value!r})")
+    return value
+
+
+def validate_suffix(suffix: str) -> str:
+    """Validate --version-suffix against a safe pattern.
+
+    Rejects path separators, '..', control chars, spaces, and other
+    characters that could corrupt filenames or crash the script.
+    Empty string is valid (means 'no suffix, use auto').
+    """
+    if not suffix:
+        return suffix
+    if not SUFFIX_RE.match(suffix):
+        raise SystemExit(
+            f"error: --version-suffix must match ^-[a-zA-Z0-9][a-zA-Z0-9._-]{{0,39}}$ "
+            f"(got {suffix!r}) — no spaces, path separators, '..', or "
+            f"control characters allowed")
+    return suffix
+
+
+def validate_title(title: str) -> str:
+    """Sanitize title for use in the # heading — strip control chars."""
+    # Remove control characters but keep normal whitespace
+    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", title).strip()
 
 
 def parse_fm_lines(lines) -> dict:
@@ -126,6 +175,23 @@ def find_by_source_url(raw_root: Path, source_url: str):
     return out
 
 
+def max_version_number(candidates) -> int:
+    """Return the maximum version number in a candidate list (unsuffixed = 1)."""
+    highest = 0
+    for path, _ in candidates:
+        m = VERSION_RE.match(path.stem)
+        num = int(m.group("num")) if m else 1
+        if num > highest:
+            highest = num
+    return highest
+
+
+def recompute_stored_hash(path: Path) -> str:
+    """Recompute the sha256 of the stored body (after frontmatter + heading)."""
+    _, body = load_raw_file(path)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def read_body(args) -> str:
     if not args.input_file:
         return sys.stdin.read()
@@ -153,13 +219,29 @@ def safe_wiki_path(raw_wiki: str) -> Path:
 
 
 def find_unchanged(candidates, url_matches, sha):
-    """Return the path of an existing file with identical content, or None."""
+    """Return the path of an existing file with identical content, or None.
+
+    Recomputes the stored body hash instead of trusting the frontmatter hash,
+    so a file that was edited after ingest (without updating frontmatter) is
+    NOT falsely reported as unchanged.
+    """
     for path, fm in url_matches:
         if fm.get("sha256") == sha:
-            return path, "source_url"
+            # Verify the stored body actually matches the frontmatter hash
+            try:
+                actual = recompute_stored_hash(path)
+            except OSError:
+                continue
+            if actual == sha:
+                return path, "source_url"
     for path, fm in candidates:
         if fm.get("sha256") == sha:
-            return path, "slug"
+            try:
+                actual = recompute_stored_hash(path)
+            except OSError:
+                continue
+            if actual == sha:
+                return path, "slug"
     return None, None
 
 
@@ -189,6 +271,33 @@ def resolve_target_dir(prev_file, url_matches, candidates, stem, raw_dir):
     return raw_dir, candidates, stem
 
 
+def atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Write text atomically: temp file in same dir, flush, rename.
+
+    Refuses to overwrite an existing target.
+    """
+    if path.exists():
+        raise SystemExit(
+            f"error: target file already exists: {path} "
+            f"(use a different --version-suffix or remove the existing file)")
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(parent), prefix=".tmp_", suffix=".md", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp_path, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--wiki", default="~/wiki")
@@ -201,6 +310,11 @@ def main():
     ap.add_argument("--version-suffix", default="",
                     help="override the version suffix (default: auto -vN on drift)")
     args = ap.parse_args()
+
+    # Validate metadata inputs before any filesystem work
+    validate_no_control_chars(args.source_url, "source-url")
+    validate_suffix(args.version_suffix)
+    title = validate_title(args.title)
 
     body = read_body(args)
     if len(body.strip()) < MIN_BODY_CHARS:
@@ -238,7 +352,11 @@ def main():
 
     suffix = args.version_suffix
     if not suffix:
-        suffix = "" if not candidates else f"-v{len(candidates) + 1}"
+        if not candidates:
+            suffix = ""
+        else:
+            # Use max version + 1, not count + 1, to handle gapped chains
+            suffix = f"-v{max_version_number(candidates) + 1}"
 
     out = target_dir / f"{stem}{suffix}.md"
     front = (
@@ -247,9 +365,9 @@ def main():
         f"ingested: {today}\n"
         f"sha256: {sha}\n"
         "---\n\n"
-        f"# {args.title}\n\n"
+        f"# {title}\n\n"
     )
-    out.write_text(front + body, encoding="utf-8")
+    atomic_write(out, front + body)
 
     result = {
         "status": "drift" if prev_file is not None else "captured",

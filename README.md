@@ -75,17 +75,21 @@ PDF-parsing benchmarks):
 `scripts/capture_raw.py` (stdlib-only) writes the raw file with `source_url` /
 `ingested` / `sha256` frontmatter and detects re-ingest drift — matched by
 slug in the target subdir AND by `source_url` across all raw/ subdirs
-(identical → skip; changed → flag + version bump `-v2`, `-v3`, …):
+(identical → skip; changed → flag + version bump `-v2`, `-v3`, … using
+max-version allocation for gapped chains). Validates metadata inputs
+(no control chars in source_url/title), validates `--version-suffix` against
+a safe pattern, uses atomic writes, and generates Unicode-safe slugs:
 
 ```bash
 python3 scripts/capture_raw.py --wiki ~/wiki --title "Doc Title" \
   --source-url https://example.com/doc < extracted.txt
 ```
 
-`scripts/verify_raw.py` (stdlib-only) lints the wiki after an ingest — the
-executable form of the skill's Verification section: hash round-trip on every
-raw file, `source_url` presence and cross-subdir duplicates, `index.md` page
-total vs. disk, and `log.md` entry format. Exit 0 = pass:
+`scripts/verify_raw.py` (stdlib-only) lints the wiki after an ingest —
+the executable form of the skill's Verification section: hash round-trip on
+every raw file, source_url presence, duplicate source_url detection across
+separate version chains (drift versions within one chain are valid),
+index.md page total vs. disk, and log.md entry format. Exit 0 = pass:
 
 ```bash
 python3 scripts/verify_raw.py --wiki ~/wiki        # human-readable
@@ -95,11 +99,12 @@ python3 scripts/verify_raw.py --wiki ~/wiki --json # machine-readable
 ### Tests
 
 ```bash
-python3 -m pytest tests/ -q   # 17 tests, both scripts end-to-end
+python3 -m pytest tests/ -q   # tests, both scripts end-to-end
 tests/run_tests.sh           # stdlib fallback, no pytest needed
 ```
 
-CI runs the suite on Python 3.10 and 3.12 on every push and PR.
+CI runs the pytest suite on Python 3.10 and 3.12, the stdlib fallback on
+3.12, and a compile check on every push and PR.
 
 ## Workflow
 

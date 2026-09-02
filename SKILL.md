@@ -1,7 +1,7 @@
 ---
 name: doc-ingest
 description: "Use when ingesting docs into the wiki and Hindsight memory."
-version: 2.3.0
+version: 2.3.1
 author: David (david6055my), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -118,20 +118,26 @@ existing pages.
 
 ## Verification
 
-Run `scripts/verify_raw.py --wiki $WIKI` after each ingest — it checks
-executable form of this whole section:
+Run `scripts/verify_raw.py --wiki $WIKI` after each ingest. It checks:
 
-- Raw file exists, body non-empty, sha256 in frontmatter matches the
+- Raw file body non-empty (>=50 chars), sha256 in frontmatter matches the
   recomputed hash of the stored body (frontmatter + title heading stripped)
-- source_url present; no duplicate source_url across raw/ subdirs
-- Every new/updated page appears in `index.md`; index total == files on disk
-- Log entry appended with the parseable prefix format
-- Hindsight retain confirmed or queued with a reason (manual step)
-- Report lists every file touched — none unaccounted for
+- source_url present; no duplicate source_url across **separate version
+  chains** (drift versions within one chain — doc.md, doc-v2.md — share
+  the same source_url and are valid)
+- index.md "Total pages" matches page files on disk (when declared)
+- log.md last entry matches `## [YYYY-MM-DD] action | subject` format
+
+**Not checked by verify_raw.py** (manual or future work):
+- Every new/updated page appears in index.md (only total count is checked)
+- Wiki links resolve
+- Hindsight retain confirmed or queued
+- Report lists every file touched
+- Page frontmatter follows schema
 
 `verify_raw.py` exits 0 on pass, 1 on failure; `--json` for machine-readable
-output. Tests: `tests/test_capture_raw.py` (17 tests, `python3 -m pytest
-tests/ -q` or `tests/run_tests.sh` stdlib fallback).
+output. Tests: `tests/test_capture_raw.py` (`python3 -m pytest tests/ -q`
+or `tests/run_tests.sh` stdlib fallback).
 
 ## L2 ↔ L3 integration patterns (Hindsight × LLM Wiki research, Aug 2026)
 
