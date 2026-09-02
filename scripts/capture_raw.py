@@ -132,6 +132,19 @@ def read_body(args) -> str:
     return sys.stdin.read()
 
 
+def safe_wiki_path(raw_wiki: str) -> Path:
+    """Expand ~ in the wiki path but reject path traversal — the slug, subdir,
+    and output filename are all agent-controlled, so only the --wiki root
+    needs guarding (SonarCloud S8707: LLM-driven CLI args must not escape
+    the intended wiki directory)."""
+    wiki = Path(raw_wiki).expanduser()
+    resolved = wiki.resolve()
+    if ".." in Path(raw_wiki).parts:
+        raise SystemExit(
+            f"error: --wiki path must not contain '..' (got {raw_wiki!r})")
+    return resolved
+
+
 def find_unchanged(candidates, url_matches, sha):
     """Return the path of an existing file with identical content, or None."""
     for path, fm in url_matches:
@@ -195,7 +208,7 @@ def main():
     sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
     today = datetime.date.today().isoformat()
     stem = slugify(args.slug) if args.slug else slugify(args.title)
-    wiki = Path(args.wiki).expanduser()
+    wiki = safe_wiki_path(args.wiki)
     raw_dir = wiki / "raw" / args.raw_subdir
     raw_dir.mkdir(parents=True, exist_ok=True)
 

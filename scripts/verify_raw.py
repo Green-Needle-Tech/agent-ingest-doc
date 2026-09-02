@@ -124,10 +124,10 @@ def main():
     seen_urls = {}
 
     if raw_root.is_dir():
-        for p in sorted(raw_root.rglob("*.md")):
-            if p.name.startswith("."):
-                continue
-            checked += 1
+        raw_files = [p for p in sorted(raw_root.rglob("*.md"))
+                     if not p.name.startswith(".")]
+        checked = len(raw_files)
+        for p in raw_files:
             check_raw_file(p, seen_urls, failures)
     else:
         failures.append(f"{raw_root}: raw/ directory not found")
