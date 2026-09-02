@@ -127,9 +127,16 @@ def find_by_source_url(raw_root: Path, source_url: str):
 
 
 def read_body(args) -> str:
-    if args.input_file:
-        return Path(args.input_file).read_text(encoding="utf-8")
-    return sys.stdin.read()
+    if not args.input_file:
+        return sys.stdin.read()
+    path = Path(args.input_file).expanduser().resolve()
+    # validate before touching the filesystem (SonarCloud S8707):
+    # must be an existing regular file, not a directory or special node
+    if not path.is_file():
+        raise SystemExit(
+            f"error: --input-file must be an existing regular file "
+            f"(got {args.input_file!r})")
+    return path.read_text(encoding="utf-8")
 
 
 def safe_wiki_path(raw_wiki: str) -> Path:
