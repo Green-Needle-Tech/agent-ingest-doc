@@ -12,16 +12,20 @@ Based on the [Karpathy LLM Wiki pattern](https://gist.github.com/karpathy/442a6b
 
 ```mermaid
 flowchart TD
-    A[📄 Source: PDF / URL / MD / docx / paste] --> B[1. Orient<br/>read SCHEMA.md · index.md · log.md]
+    A[📄 Source: PDF / URL / MD / docx / paste] --> SEC{Security gate<br/>untrusted-content policy}
+    SEC -->|URL source| SF[safe_fetch.py<br/>SSRF: scheme + private IP + redirect validation]
+    SEC -->|file/paste| B
+    SF --> B[1. Orient<br/>read SCHEMA.md · index.md · log.md<br/>doctor.py verifies deps]
     B --> C{2. Extract — lowest rung survived}
     C -->|text layer| C1[pymupdf4llm / read_file / web_extract]
     C -->|layout broke| C2[docling / marker]
     C2 --> C3[OCR: pdftoppm + tesseract / vision]
-    C1 --> D[Capture raw → wiki/raw/<br/>frontmatter: source_url · ingested · sha256]
+    C1 --> D[Capture raw → wiki/raw/<br/>frontmatter: source_url · ingested · sha256<br/>manifest: extractor · source_kind · retrieved_at]
     C3 --> D
-    D --> E{Already in raw/?}
+    D --> M[manifest.json sidecar<br/>extraction_sha256 · extractor · parent_version]
+    M --> E{Already in raw/?}
     E -->|identical hash| F[Skip capture, pages only]
-    E -->|hash drift| G[Flag to user, save -v2]
+    E -->|hash drift| G[Flag to user, save -vN<br/>max-version allocation]
     E -->|new| H[3. Coverage check<br/>search entities/ concepts/ comparisons/]
     F --> H
     G --> H
@@ -30,15 +34,15 @@ flowchart TD
     I -->|passing mention| K[No page]
     J --> L[5. Update navigation<br/>index.md · log.md one entry]
     K --> L
-    L --> M[6. Retain L2 pointer → Hindsight<br/>tags: wiki-ref + topics<br/>NEVER document content]
-    M --> N{Hindsight ≥ v0.9 Knowledge Page<br/>tagged wiki-ref?}
+    L --> P[6. Retain L2 pointer → Hindsight<br/>tags: wiki-ref + topics<br/>NEVER document content]
+    P --> N{Hindsight ≥ v0.9 Knowledge Page<br/>tagged wiki-ref?}
     N -->|yes| O[Delta-refreshes into self-maintaining<br/>searchable Ingest Index]
-    N -->|no| P[Recall pointer as index only]
+    N -->|no| R[Recall pointer as index only]
     O --> Q[7. Report every file touched]
-    P --> Q
-    Q --> R{8. Routing changed?<br/>L1 < 75% capacity}
-    R -->|rare| S[One declarative line → MEMORY.md]
-    R -->|default| T[Skip silently]
+    R --> Q
+    Q --> S{8. Routing changed?<br/>L1 < 75% capacity}
+    S -->|rare| T[One declarative line → MEMORY.md]
+    S -->|default| U[Skip silently]
 ```
 
 Query-time routing (dual-store, Pattern 3): known page → read the wiki directly (index-first, deterministic); temporal / entity-relational / personal question → `hindsight_recall` / `hindsight_reflect`; document pick → Knowledge Page search (`GET /knowledge-base/search`).
@@ -48,6 +52,13 @@ Query-time routing (dual-store, Pattern 3): known page → read the wiki directl
 ```bash
 mkdir -p ~/.hermes/skills/research
 git clone https://github.com/Green-Needle-Tech/agent-ingest-doc.git ~/.hermes/skills/research/doc-ingest
+```
+
+Bootstrap a new wiki (no `llm-wiki` skill required):
+
+```bash
+python3 ~/.hermes/skills/research/doc-ingest/scripts/init_wiki.py --wiki ~/wiki
+python3 ~/.hermes/skills/research/doc-ingest/scripts/doctor.py --wiki ~/wiki
 ```
 
 ## Usage
@@ -133,13 +144,14 @@ CI runs the pytest suite on Python 3.10 and 3.12, the stdlib fallback on
 
 ## Workflow
 
-1. **Orient** — read SCHEMA.md / index.md / log.md (prevents duplicates)
-2. **Capture** — route by type (web_extract, PDF text-layer, OCR fallback, verbatim copy); sha256 frontmatter
-3. **Check coverage** — search existing pages, apply page thresholds
-4. **Write/update wiki pages** — wikilinks, provenance markers, confidence levels
-5. **Update navigation** — index.md + append-only log.md
-6. **Retain L2 pointer** — episode metadata via `hindsight_retain`, tagged `wiki-ref`
-7. **Report** — every file created/updated
+1. **Security gate** — all source content is untrusted data; URLs validated by `safe_fetch.py` (SSRF protections)
+2. **Orient** — read SCHEMA.md / index.md / log.md (prevents duplicates); `doctor.py` verifies deps
+3. **Capture** — route by type (web_extract, PDF text-layer, OCR fallback, verbatim copy); sha256 frontmatter + manifest sidecar (extractor, source_kind, retrieved_at)
+4. **Check coverage** — search existing pages, apply page thresholds
+5. **Write/update wiki pages** — wikilinks, provenance markers, confidence levels
+6. **Update navigation** — index.md + append-only log.md
+7. **Retain L2 pointer** — episode metadata via `hindsight_retain`, tagged `wiki-ref`
+8. **Report** — every file created/updated
 
 ## How this maps to Hindsight (Aug 2026 research)
 
