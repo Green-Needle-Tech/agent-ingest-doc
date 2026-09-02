@@ -25,5 +25,5 @@ lines=$(echo "$out" | grep -c '"status"')
 check "drift exactly one JSON line" '^1$' "$lines"
 out=$(echo "$BODY" | python3 scripts/verify_raw.py --wiki "$TMP" --json)
 check "verify clean" '"status": "ok"' "$out"
-[ "$fail" -eq 0 ] && echo "ALL SMOKE CHECKS PASSED"
+if [[ "$fail" -eq 0 ]]; then echo "ALL SMOKE CHECKS PASSED"; fi
 exit "$fail"

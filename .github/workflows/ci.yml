@@ -16,8 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install pytest
-        run: pip install pytest
+      - name: Install pytest (locked version, binary-only)
+        run: "pip install --only-binary :all: pytest==9.1.1"
       - name: Run tests
         run: python -m pytest tests/ -q
 
@@ -31,5 +31,5 @@ jobs:
       - name: Compile check (all scripts stdlib-only, no deps)
         run: |
           python -m py_compile scripts/capture_raw.py scripts/verify_raw.py
-          python scripts/capture_raw.py --help >/dev/null
-          python scripts/verify_raw.py --help >/dev/null
+          python scripts/capture_raw.py --help > /dev/null
+          python scripts/verify_raw.py --help > /dev/null
