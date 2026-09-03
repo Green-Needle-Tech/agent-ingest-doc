@@ -59,7 +59,7 @@ NO_MATERIAL_HEADING_RE = re.compile(
     r"^## \[[^\]]*\]\s*ingest\s*\|\s*no material:\s*(\S+)", re.IGNORECASE
 )
 ARCHIVED_RE = re.compile(r"^>\s*Archived:")
-FENCE_OPEN_RE = re.compile(r"^ {0,3}(`+|~+)(.*)$")
+FENCE_OPEN_RE = re.compile(r"^ {0,3}(`+|~+)")
 FENCE_OPEN_MIN = 3  # a fence needs >= 3 backticks or tildes
 FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`+|~+)[ \t]*$")
 WS_RE = re.compile(r"\s+")
@@ -88,10 +88,10 @@ def fence_opener(line: str) -> tuple[str, int] | None:
     m = FENCE_OPEN_RE.match(line)
     if not m:
         return None
-    marker, info = m.groups()
+    marker = m.group(1)
     if len(marker) < FENCE_OPEN_MIN:
         return None
-    if marker[0] == "`" and "`" in info:
+    if marker[0] == "`" and "`" in line[m.end():]:
         return None
     return marker[0], len(marker)
 
