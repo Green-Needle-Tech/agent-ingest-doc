@@ -447,6 +447,24 @@ def write_legacy_raw(out: Path, title: str, source_url: str, today: str,
     atomic_write(out, front + body)
 
 
+def _resolve_raw_dir(layout: str, root: Path, topic: str,
+                     raw_subdir: str | None) -> Path:
+    """Return the raw/ output directory for the detected layout."""
+    if layout == "karpathy":
+        return raw_root(layout, root) / topic
+    return raw_root(layout, root) / (raw_subdir or "articles")
+
+
+def _resolve_suffix(version_suffix: str, candidates) -> str:
+    """Return the explicit suffix, or auto -vN (max version + 1) on drift."""
+    if version_suffix:
+        return version_suffix
+    if not candidates:
+        return ""
+    # Use max version + 1, not count + 1, to handle gapped chains
+    return f"-v{max_version_number(candidates) + 1}"
+
+
 def _write_karpathy_capture(target_dir, stem, suffix, published, title,
                            source, today, body, sha, args) -> Path:
     """Write a karpathy-format capture and merge its manifest sidecar."""
@@ -542,11 +560,7 @@ def main():
     stem = slugify(args.slug) if args.slug else slugify(args.title)
     root = safe_wiki_path(args.wiki)
     layout, root = detect_layout(root)
-
-    if layout == "karpathy":
-        raw_dir = raw_root(layout, root) / topic
-    else:
-        raw_dir = raw_root(layout, root) / (args.raw_subdir or "articles")
+    raw_dir = _resolve_raw_dir(layout, root, topic, args.raw_subdir)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     source = args.source_url
@@ -569,14 +583,7 @@ def main():
         old_sha = stored_hash(prev_file, layout)
     target_dir, candidates, stem = resolve_target_dir(
         prev_file, source_matches, candidates, stem, raw_dir, layout)
-
-    suffix = args.version_suffix
-    if not suffix:
-        if not candidates:
-            suffix = ""
-        else:
-            # Use max version + 1, not count + 1, to handle gapped chains
-            suffix = f"-v{max_version_number(candidates) + 1}"
+    suffix = _resolve_suffix(args.version_suffix, candidates)
 
     if layout == "karpathy":
         out = _write_karpathy_capture(
