@@ -4,10 +4,14 @@
 Checks:
   1. Python version (>= 3.10)
   2. Writable wiki path
-  3. SCHEMA.md present in wiki
-  4. Hindsight health (default http://localhost:8888, or $HINDSIGHT_URL)
-  5. Extraction tools: pymupdf4llm, docling, marker, tesseract
-  6. llm-wiki skill present in the Hermes skills directory
+  3. Layout detection (karpathy = astro-han/karpathy-llm-wiki, or legacy)
+  4. karpathy layout: wiki/index.md + wiki/log.md present
+     legacy layout: SCHEMA.md present
+  5. Hindsight health (default http://localhost:8888, or $HINDSIGHT_URL)
+  6. Extraction tools: pymupdf4llm, docling, marker, tesseract
+  7. LLM wiki skill present (karpathy-llm-wiki or llm-wiki) in the Hermes
+     skills directory, OR check_evidence.py runnable (the karpathy-llm-wiki
+     lint script)
 
 Defaults are host-portable (no hardcoded /root): wiki = $WIKI_PATH or
 <real home>/wiki; Hermes skills = <hermes home>/skills where hermes home =
@@ -20,7 +24,6 @@ Usage:
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +32,7 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hermes_paths import default_hindsight_url, default_wiki, hermes_home  # noqa: E402
+from wiki_layout import detect_layout, wiki_dir  # noqa: E402
 
 PY_MIN = (3, 10)
 
@@ -62,8 +66,22 @@ def check_wiki_writable(wiki: Path):
     return ok, f"wiki at {wiki} ({'writable' if ok else 'not writable'})"
 
 
-def check_schema(wiki: Path):
-    schema = wiki / "SCHEMA.md"
+def check_layout(root: Path):
+    layout, detected_root = detect_layout(root)
+    return True, f"layout: {layout} (root {detected_root})"
+
+
+def check_structure(layout: str, root: Path):
+    wdir = wiki_dir(layout, root)
+    if layout == "karpathy":
+        missing = [n for n in ("index.md", "log.md")
+                   if not (wdir / n).is_file()]
+        if missing or not wdir.is_dir():
+            return False, f"karpathy wiki structure incomplete at {wdir} " \
+                          f"(missing: {', '.join(missing) or 'wiki/'}; " \
+                          f"run init_wiki.py)"
+        return True, f"karpathy wiki at {wdir} (index.md + log.md present)"
+    schema = root / "SCHEMA.md"
     ok = schema.is_file()
     return ok, f"SCHEMA.md {'present' if ok else 'missing'} at {schema}"
 
@@ -94,16 +112,27 @@ def check_python_pkg(name: str):
         return False, f"{name} not installed"
 
 
-def check_llm_wiki_skill():
+def check_wiki_skill():
+    """LLM wiki skill: karpathy-llm-wiki (preferred) or llm-wiki, under the
+    Hermes skills dir; or a runnable check_evidence.py next to either."""
     skills_root = hermes_home() / "skills"
-    skill_paths = [
-        skills_root / "research" / "llm-wiki",
-        skills_root / "llm-wiki",
-    ]
-    for p in skill_paths:
-        if p.is_dir():
-            return True, f"llm-wiki skill at {p}"
-    return False, f"llm-wiki skill not found under {skills_root}"
+    candidates = []
+    for pattern in ("karpathy-llm-wiki", "llm-wiki"):
+        for p in skills_root.rglob(pattern):
+            if p.is_dir():
+                candidates.append(p)
+    for skill_dir in candidates:
+        script = skill_dir / "scripts" / "check_evidence.py"
+        if script.is_file():
+            return True, f"karpathy-llm-wiki lint at {script}"
+    if candidates:
+        return True, f"LLM wiki skill at {candidates[0]} (no check_evidence.py)"
+    # check_evidence.py shipped alongside this skill (repo checkout)
+    local = Path(__file__).resolve().parent / "check_evidence.py"
+    if local.is_file():
+        return True, f"check_evidence.py at {local}"
+    return False, f"LLM wiki skill not found under {skills_root} and no " \
+                  f"check_evidence.py available"
 
 
 def main():
@@ -113,18 +142,21 @@ def main():
     ap.add_argument("--json", action="store_true", dest="as_json")
     args = ap.parse_args()
 
-    wiki = Path(args.wiki).expanduser()
+    root = Path(args.wiki).expanduser()
+    layout, detected_root = detect_layout(root)
 
     checks = [
         check("Python version", check_python),
-        check("Wiki path writable", lambda: check_wiki_writable(wiki)),
-        check("SCHEMA.md", lambda: check_schema(wiki)),
+        check("Wiki path writable", lambda: check_wiki_writable(root)),
+        check("Wiki layout", lambda: check_layout(root)),
+        check("Wiki structure",
+              lambda: check_structure(layout, detected_root)),
         check("Hindsight health", lambda: check_hindsight(args.hindsight_url)),
         check("pymupdf4llm", lambda: check_python_pkg("pymupdf4llm")),
         check("docling", lambda: check_python_pkg("docling")),
         check("marker", lambda: check_python_pkg("marker")),
         check("tesseract", lambda: check_tool("tesseract", ["tesseract", "--version"])),
-        check("llm-wiki skill", check_llm_wiki_skill),
+        check("LLM wiki skill", check_wiki_skill),
     ]
 
     passed = sum(1 for c in checks if c["ok"])
@@ -132,6 +164,8 @@ def main():
 
     if args.as_json:
         print(json.dumps({
+            "wiki": str(detected_root),
+            "layout": layout,
             "total": len(checks),
             "passed": passed,
             "failed": failed,

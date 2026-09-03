@@ -93,7 +93,13 @@ def test_no_prefix_collision(tmp_path):
 
 
 def test_hash_scope_roundtrip(tmp_path):
-    """Bug 4: sha256 in frontmatter must match recomputed hash of stored body."""
+    """Bug 4: sha256 in frontmatter must match recomputed hash of stored body.
+
+    Tests the legacy layout (YAML frontmatter) — karpathy uses a JSON
+    sidecar, tested in test_karpathy_compat.py.
+    """
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     rc, objs, _ = run_capture(tmp_path, "Test Doc", "https://example.com/a")
     assert rc == 0
     raw = tmp_path / "raw/articles/test-doc.md"
@@ -278,6 +284,9 @@ def test_verify_detects_hash_mismatch(tmp_path):
 
 
 def test_verify_detects_missing_source_url(tmp_path):
+    """Legacy layout: removing source_url from frontmatter must fail."""
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     run_capture(tmp_path, "Test Doc", "https://example.com/a")
     raw = tmp_path / "raw/articles/test-doc.md"
     raw.write_text(raw.read_text().replace(
@@ -299,11 +308,13 @@ def test_verify_drift_chain_passes(tmp_path):
 
 def test_verify_detects_duplicate_source_url_separate_chains(tmp_path):
     """Duplicate source_url across SEPARATE chains (different slugs) must fail."""
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     run_capture(tmp_path, "Doc A", "https://example.com/same")
     # Create a separate chain with a different slug but same URL
     # by manually writing a file in a different directory
     papers = tmp_path / "raw/papers"
-    papers.mkdir(parents=True)
+    papers.mkdir(parents=True, exist_ok=True)  # init_legacy may already have created it
     (papers / "different-slug.md").write_text(
         "---\n"
         "source_url: https://example.com/same\n"
@@ -314,11 +325,13 @@ def test_verify_detects_duplicate_source_url_separate_chains(tmp_path):
         encoding="utf-8")
     rc, out = run_verify(tmp_path)
     assert rc == 1
-    assert any("duplicate source_url" in f for f in out["failures"]), (
+    assert any("duplicate" in f and "https://example.com/same" in f for f in out["failures"]), (
         f"Expected duplicate source_url failure, got: {out['failures']}")
 
 
 def test_verify_detects_bad_log_format(tmp_path):
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     run_capture(tmp_path, "Test Doc", "https://example.com/a")
     (tmp_path / "log.md").write_text("## Some random heading\n", encoding="utf-8")
     rc, out = run_verify(tmp_path)
@@ -327,6 +340,8 @@ def test_verify_detects_bad_log_format(tmp_path):
 
 
 def test_verify_index_total_mismatch(tmp_path):
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     run_capture(tmp_path, "Test Doc", "https://example.com/a")
     (tmp_path / "index.md").write_text("Total pages: 5\n", encoding="utf-8")
     rc, out = run_verify(tmp_path)
@@ -338,6 +353,8 @@ def test_verify_index_total_mismatch(tmp_path):
 
 def test_manifest_sidecar_created(tmp_path):
     """capture_raw.py writes a JSON manifest sidecar with extraction metadata."""
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     rc, objs, _ = run_capture(tmp_path, "Manifest Test", "https://m.test",
                               extra=["--extractor", "pymupdf4llm",
                                      "--source-kind", "url"])
@@ -355,6 +372,8 @@ def test_manifest_sidecar_created(tmp_path):
 
 def test_manifest_default_extractor(tmp_path):
     """Manifest defaults to 'unknown' extractor when --extractor not given."""
+    from scripts.init_wiki import init_legacy
+    init_legacy(tmp_path)
     rc, objs, _ = run_capture(tmp_path, "Def Test", "https://d.test")
     assert rc == 0
     manifest_path = Path(objs[0]["file"]).with_suffix(".json")
@@ -415,10 +434,11 @@ INIT_WIKI = REPO / "scripts" / "init_wiki.py"
 
 
 def test_init_wiki_creates_structure(tmp_path):
-    """init_wiki.py creates the full wiki directory structure."""
+    """init_wiki.py --layout legacy creates the full wiki directory structure."""
     wiki = tmp_path / "test-wiki"
     r = subprocess.run(
-        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki), "--json"],
+        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki),
+         "--layout", "legacy", "--json"],
         capture_output=True, text=True)
     assert r.returncode == 0
     out = json.loads(r.stdout)
@@ -435,9 +455,10 @@ def test_init_wiki_creates_structure(tmp_path):
 def test_init_wiki_idempotent(tmp_path):
     """init_wiki.py is safe to re-run — won't overwrite existing files."""
     wiki = tmp_path / "test-wiki"
-    # First run
+    # First run (legacy layout)
     subprocess.run(
-        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki), "--json"],
+        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki),
+         "--layout", "legacy", "--json"],
         capture_output=True, text=True)
     # Modify a file
     schema = wiki / "SCHEMA.md"
@@ -445,7 +466,8 @@ def test_init_wiki_idempotent(tmp_path):
     schema.write_text("# Custom Schema\n")
     # Second run
     r = subprocess.run(
-        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki), "--json"],
+        [sys.executable, str(INIT_WIKI), "--wiki", str(wiki),
+         "--layout", "legacy", "--json"],
         capture_output=True, text=True)
     assert r.returncode == 0
     # Custom content preserved
@@ -481,9 +503,12 @@ HERMES_PATHS = REPO / "scripts" / "hermes_paths.py"
 def _run_paths_module(env_overrides: dict | None = None):
     """Import hermes_paths under a clean env and return the module object."""
     import importlib
-    env = dict(os.environ)
-    for k in ("HERMES_HOME", "HERMES_REAL_HOME", "WIKI_PATH", "HINDSIGHT_URL"):
-        env.pop(k, None)
+    # Start from a minimal env, NOT a copy of os.environ, so leaked
+    # WIKI_PATH / HERMES_HOME values from the test runner don't interfere.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
     if env_overrides:
         env.update(env_overrides)
     code = (
