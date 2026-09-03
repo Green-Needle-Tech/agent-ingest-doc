@@ -64,6 +64,7 @@ SUFFIX_RE = re.compile(r"^-[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,59}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MIN_BODY_CHARS = 50
+JSON_SUFFIX = ".json"  # sidecar/manifest extension (S1192: single constant)
 
 
 def slugify(title: str) -> str:
@@ -247,13 +248,18 @@ def find_by_source(raw_root: Path, source: str, layout: str):
     if not raw_root.is_dir():
         return out
     for p in sorted(raw_root.rglob("*.md")):
-        try:
-            header, _ = load_raw_file(p, layout)
-        except OSError:
-            continue
-        if header.get(key) == source:
+        header = _load_header(p, layout)
+        if header is not None and header.get(key) == source:
             out.append((p, header))
     return out
+
+
+def _load_header(path: Path, layout: str):
+    """Load a raw file's header dict, or None if unreadable."""
+    try:
+        return load_raw_file(path, layout)[0]
+    except OSError:
+        return None
 
 
 def max_version_number(candidates) -> int:
@@ -277,7 +283,7 @@ def stored_hash(path: Path, layout: str, sidecar_dir: Path | None = None) -> str
     legacy layout: the hash is in the frontmatter.
     """
     if layout == "karpathy":
-        sidecar = path.with_suffix(".json")
+        sidecar = path.with_suffix(JSON_SUFFIX)
         if sidecar.is_file():
             try:
                 return json.loads(sidecar.read_text(encoding="utf-8")).get(
@@ -321,6 +327,21 @@ def safe_wiki_path(raw_wiki: str) -> Path:
     return resolved
 
 
+def _hash_matches(path, header, sha, layout) -> bool:
+    """True if the file's recorded AND recomputed body hash equal sha."""
+    def recorded_hash(path, header):
+        if layout == "legacy":
+            return header.get("sha256", "")
+        return stored_hash(path, layout)  # karpathy: sidecar JSON
+
+    if recorded_hash(path, header) != sha:
+        return False
+    try:
+        return recompute_stored_hash(path, layout) == sha
+    except OSError:
+        return False
+
+
 def find_unchanged(candidates, source_matches, sha, layout):
     """Return the path of an existing file with identical content, or None.
 
@@ -328,27 +349,12 @@ def find_unchanged(candidates, source_matches, sha, layout):
     so a file that was edited after ingest (without updating its hash) is
     NOT falsely reported as unchanged.
     """
-    def recorded_hash(path, header):
-        if layout == "legacy":
-            return header.get("sha256", "")
-        return stored_hash(path, layout)  # karpathy: sidecar JSON
-
     for path, header in source_matches:
-        if recorded_hash(path, header) == sha:
-            try:
-                actual = recompute_stored_hash(path, layout)
-            except OSError:
-                continue
-            if actual == sha:
-                return path, "source"
+        if _hash_matches(path, header, sha, layout):
+            return path, "source"
     for path, header in candidates:
-        if recorded_hash(path, header) == sha:
-            try:
-                actual = recompute_stored_hash(path, layout)
-            except OSError:
-                continue
-            if actual == sha:
-                return path, "slug"
+        if _hash_matches(path, header, sha, layout):
+            return path, "slug"
     return None, None
 
 
@@ -416,7 +422,7 @@ def write_karpathy_raw(out: Path, title: str, source: str, today: str,
         f"> Published: {published}\n\n"
     )
     atomic_write(out, header + body)
-    sidecar = out.with_suffix(".json")
+    sidecar = out.with_suffix(JSON_SUFFIX)
     manifest = {
         "schema_version": 2,
         "sha256": sha,
@@ -439,6 +445,48 @@ def write_legacy_raw(out: Path, title: str, source_url: str, today: str,
         f"# {title}\n\n"
     )
     atomic_write(out, front + body)
+
+
+def _write_karpathy_capture(target_dir, stem, suffix, published, title,
+                           source, today, body, sha, args) -> Path:
+    """Write a karpathy-format capture and merge its manifest sidecar."""
+    date_prefix = f"{published}-" if published else ""
+    out = target_dir / f"{date_prefix}{stem}{suffix}.md"
+    write_karpathy_raw(out, title, source, today, published or "Unknown",
+                       body, sha)
+    # extraction manifest (separate from the sha sidecar, appended)
+    if args.extractor or args.source_kind != "url":
+        sidecar = out.with_suffix(JSON_SUFFIX)
+        manifest = json.loads(sidecar.read_text(encoding="utf-8"))
+        manifest["source_kind"] = args.source_kind
+        manifest["retrieved_at"] = datetime.datetime.now(
+            datetime.timezone.utc).isoformat()
+        manifest["extraction_sha256"] = sha
+        manifest["extractor"] = args.extractor or "unknown"
+        sidecar.write_text(json.dumps(manifest, indent=2) + "\n",
+                           encoding="utf-8")
+    return out
+
+
+def _write_legacy_capture(target_dir, stem, suffix, title, source, today,
+                          body, sha, args, prev_file) -> Path:
+    """Write a legacy-format capture and its manifest sidecar."""
+    out = target_dir / f"{stem}{suffix}.md"
+    write_legacy_raw(out, title, source, today, body, sha)
+    manifest = {
+        "schema_version": 1,
+        "source_uri": source,
+        "source_kind": args.source_kind,
+        "retrieved_at": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(),
+        "extraction_sha256": sha,
+        "extractor": args.extractor or "unknown",
+        "raw_file": out.name,
+    }
+    if prev_file is not None:
+        manifest["parent_version"] = str(prev_file)
+    atomic_write(out.with_suffix(JSON_SUFFIX), json.dumps(manifest, indent=2))
+    return out
 
 
 def main():
@@ -531,39 +579,13 @@ def main():
             suffix = f"-v{max_version_number(candidates) + 1}"
 
     if layout == "karpathy":
-        date_prefix = f"{published}-" if published else ""
-        out = target_dir / f"{date_prefix}{stem}{suffix}.md"
-        write_karpathy_raw(out, title, source, today,
-                           published or "Unknown", body, sha)
-        # extraction manifest (separate from the sha sidecar, appended)
-        if args.extractor or args.source_kind != "url":
-            sidecar = out.with_suffix(".json")
-            manifest = json.loads(sidecar.read_text(encoding="utf-8"))
-            manifest["source_kind"] = args.source_kind
-            manifest["retrieved_at"] = datetime.datetime.now(
-                datetime.timezone.utc).isoformat()
-            manifest["extraction_sha256"] = sha
-            manifest["extractor"] = args.extractor or "unknown"
-            sidecar.write_text(json.dumps(manifest, indent=2) + "\n",
-                               encoding="utf-8")
+        out = _write_karpathy_capture(
+            target_dir, stem, suffix, published, title, source, today,
+            body, sha, args)
     else:
-        out = target_dir / f"{stem}{suffix}.md"
-        write_legacy_raw(out, title, source, today, body, sha)
-        # extraction manifest sidecar
-        manifest_path = out.with_suffix(".json")
-        manifest = {
-            "schema_version": 1,
-            "source_uri": source,
-            "source_kind": args.source_kind,
-            "retrieved_at": datetime.datetime.now(
-                datetime.timezone.utc).isoformat(),
-            "extraction_sha256": sha,
-            "extractor": args.extractor or "unknown",
-            "raw_file": out.name,
-        }
-        if prev_file is not None:
-            manifest["parent_version"] = str(prev_file)
-        atomic_write(manifest_path, json.dumps(manifest, indent=2))
+        out = _write_legacy_capture(
+            target_dir, stem, suffix, title, source, today, body, sha,
+            args, prev_file)
 
     result = {
         "status": "drift" if prev_file is not None else "captured",

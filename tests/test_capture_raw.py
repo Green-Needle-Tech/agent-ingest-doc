@@ -582,3 +582,40 @@ def test_hermes_paths_hindsight_url_default():
     """Default Hindsight URL when env is unset."""
     result = _run_paths_module()
     assert result["hindsight"] == "http://localhost:8888"
+
+
+def test_hermes_paths_real_home_no_fallback_to_tmp():
+    """real_home raises instead of falling back to a publicly writable dir.
+
+    Regression for SonarCloud S5443: the old Path("/tmp") fallback could
+    let another user hijack paths this skill writes to (CWE-377).
+    """
+    # Neutralize every resolution source: HOME pointed at a profile-home
+    # sandbox, pwd database returns a nonexistent dir, expanduser inert.
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": "",
+        "HERMES_HOME": "",
+        "HERMES_REAL_HOME": "",
+    }
+    inner = (
+        "import os, sys, importlib.util, json\n"
+        "os.environ.update({!r})\n"
+        "spec = importlib.util.spec_from_file_location('hp', {!r})\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "m._pwd_home = lambda: None\n"
+        "m.os.path.expanduser = lambda p: p\n"
+        "try:\n"
+        "    m.real_home()\n"
+        "    print(json.dumps(dict(raised=False)))\n"
+        "except RuntimeError as e:\n"
+        "    print(json.dumps(dict(raised=True, msg=str(e))))\n"
+    ).format(env, str(HERMES_PATHS))
+    code = "exec({!r})".format(inner)
+    r = subprocess.run([sys.executable, "-c", code],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"hermes_paths import failed: {r.stderr}"
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["raised"] is True, out
+    assert "HERMES_REAL_HOME" in out["msg"]

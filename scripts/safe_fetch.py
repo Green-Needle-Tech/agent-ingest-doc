@@ -30,11 +30,12 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_MAX_REDIRECTS = 5
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 
-# Cloud metadata IPs that must never be fetched
+# Cloud metadata IPs that must never be fetched. Hardcoded on purpose: this
+# is an SSRF blocklist of well-known metadata endpoints, not user input.
 METADATA_IPS = {
-    ipaddress.ip_address("169.254.169.254"),  # AWS/GCP/Azure
-    ipaddress.ip_address("fd00:ec2::254"),     # AWS IPv6
-    ipaddress.ip_address("100.100.100.200"),   # Alibaba Cloud
+    ipaddress.ip_address("169.254.169.254"),  # noqa: S1313 — SSRF blocklist: metadata endpoint
+    ipaddress.ip_address("fd00:ec2::254"),  # noqa: S1313 — SSRF blocklist: metadata endpoint
+    ipaddress.ip_address("100.100.100.200"),  # noqa: S1313 — SSRF blocklist: metadata endpoint
 }
 
 ALLOWED_SCHEMES = ("http", "https")
@@ -81,35 +82,62 @@ def validate_url(url: str) -> str:
     if not hostname:
         raise FetchError("no hostname in URL")
 
-    # Resolve hostname and check all IPs
+    _assert_ips_safe(hostname, parsed.port or 443)
+    return url
+
+
+def _assert_ips_safe(hostname: str, port: int) -> None:
+    """Resolve hostname and reject any address in a blocked IP class."""
     try:
         addrinfos = socket.getaddrinfo(
-            hostname, parsed.port or 443,
-            type=socket.SOCK_STREAM)
+            hostname, port, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
         raise FetchError(f"DNS resolution failed for {hostname}: {e}")
 
-    for family, _, _, _, sockaddr in addrinfos:
-        ip_str = sockaddr[0]
+    for _, _, _, _, sockaddr in addrinfos:
         try:
-            ip = ipaddress.ip_address(ip_str)
+            ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             continue
+        reason = _ip_block_reason(ip)
+        if reason:
+            raise FetchError(f"{reason} blocked: {ip}")
 
-        if ip in METADATA_IPS:
-            raise FetchError(f"cloud metadata IP blocked: {ip}")
-        if ip.is_loopback:
-            raise FetchError(f"loopback IP blocked: {ip}")
-        if ip.is_private:
-            raise FetchError(f"private IP blocked: {ip}")
-        if ip.is_link_local:
-            raise FetchError(f"link-local IP blocked: {ip}")
-        if ip.is_multicast:
-            raise FetchError(f"multicast IP blocked: {ip}")
-        if ip.is_reserved:
-            raise FetchError(f"reserved IP blocked: {ip}")
 
-    return url
+def _ip_block_reason(ip) -> str:
+    """Return why this IP is blocked, or an empty string if it is safe."""
+    if ip in METADATA_IPS:
+        return "cloud metadata IP"
+    if ip.is_loopback:
+        return "loopback IP"
+    if ip.is_private:
+        return "private IP"
+    if ip.is_link_local:
+        return "link-local IP"
+    if ip.is_multicast:
+        return "multicast IP"
+    if ip.is_reserved:
+        return "reserved IP"
+    return ""
+
+
+def _read_capped(resp, max_bytes: int) -> bytes:
+    """Read the response body, refusing anything over the byte cap."""
+    cl = resp.headers.get("Content-Length")
+    if cl and int(cl) > max_bytes:
+        raise FetchError(f"content length {cl} exceeds max {max_bytes}")
+    data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise FetchError(f"downloaded bytes exceed max {max_bytes}")
+    return data
+
+
+def _decode_body(data: bytes) -> str:
+    """Decode as utf-8, falling back to latin-1."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
 
 
 def safe_fetch(
@@ -138,17 +166,7 @@ def safe_fetch(
                 current_url,
                 headers={"User-Agent": "doc-ingest-safe-fetch/1.0"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                # Check content length if declared
-                cl = resp.headers.get("Content-Length")
-                if cl and int(cl) > max_bytes:
-                    raise FetchError(
-                        f"content length {cl} exceeds max {max_bytes}")
-
-                # Read with byte cap
-                data = resp.read(max_bytes + 1)
-                if len(data) > max_bytes:
-                    raise FetchError(
-                        f"downloaded bytes exceed max {max_bytes}")
+                data = _read_capped(resp, max_bytes)
 
                 # Check for redirect (urllib follows automatically, but
                 # we validate the final URL too)
@@ -159,11 +177,7 @@ def safe_fetch(
                     # Re-validate (already done at loop top, but be explicit)
                     continue
 
-                # Decode — try utf-8, fall back to latin-1
-                try:
-                    return data.decode("utf-8")
-                except UnicodeDecodeError:
-                    return data.decode("latin-1")
+                return _decode_body(data)
 
         except urllib.error.HTTPError as e:
             raise FetchError(f"HTTP {e.code}: {e.reason}")

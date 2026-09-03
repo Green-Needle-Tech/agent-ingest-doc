@@ -312,3 +312,44 @@ def test_vendored_check_evidence_upstream_suite():
          "--rootdir", str(REPO)],
         capture_output=True, text=True, cwd=str(REPO))
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ---------- SonarCloud security regression tests ----------
+
+def test_check_evidence_rejects_escaping_article_arg(tmp_path):
+    """A CLI article arg containing '..' must be rejected, not read."""
+    init_karpathy(tmp_path / "kb")
+    root = tmp_path / "kb"
+    rc, objs, _ = run_capture(root, "Escape Doc", "https://example.com/escape")
+    assert rc == 0 and objs[-1]["status"] == "captured"
+    r = subprocess.run(
+        [sys.executable, str(CHECK_EVIDENCE), str(root),
+         "../../../etc/passwd"],
+        capture_output=True, text=True)
+    assert r.returncode == 0  # warning, not a crash
+    assert "path escapes wiki root" in r.stderr
+
+
+def test_check_evidence_accepts_valid_article_arg(tmp_path):
+    """A normal relative article arg still works after path validation."""
+    init_karpathy(tmp_path / "kb")
+    root = tmp_path / "kb"
+    rc, objs, _ = run_capture(root, "Valid Doc", "https://example.com/valid")
+    assert rc == 0 and objs[-1]["status"] == "captured"
+    # capture_raw only writes raw/; create the wiki article in karpathy
+    # format so check_evidence has an article to resolve.
+    raw_rel = Path(objs[-1]["file"]).relative_to(root).as_posix()
+    article = root / "wiki" / "valid-doc.md"
+    article.write_text(
+        "# Valid Doc\n\n"
+        "> Source: https://example.com/valid\n"
+        f"> Raw: ({raw_rel})\n\n"
+        f"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do "
+        "eiusmod tempor incididunt ut labore et dolore magna aliqua.\n",
+        encoding="utf-8")
+    r = subprocess.run(
+        [sys.executable, str(CHECK_EVIDENCE), str(root),
+         article.relative_to(root).as_posix()],
+        capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "warning" not in r.stderr
