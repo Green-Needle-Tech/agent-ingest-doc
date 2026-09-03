@@ -1,7 +1,7 @@
 ---
 name: doc-ingest
 description: "Use when ingesting docs into the wiki and Hindsight memory."
-version: 2.6.0
+version: 2.7.0
 author: David (david6055my), Hermes Agent
 license: MIT
 platforms: [linux, macos]
