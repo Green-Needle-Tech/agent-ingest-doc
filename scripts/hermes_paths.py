@@ -79,7 +79,13 @@ def real_home() -> Path:
         if profile_home and key == _norm(profile_home):
             continue  # profile sandbox — keep looking for the account home
         return Path(cand)
-    return Path("/tmp")
+    # No home directory could be resolved. Refuse rather than fall back to a
+    # publicly writable directory such as /tmp, where another user could
+    # pre-create or hijack paths this skill writes to (CWE-377).
+    raise RuntimeError(
+        "could not resolve the OS user home directory; set HERMES_REAL_HOME "
+        "or HOME explicitly"
+    )
 
 
 def hermes_home() -> Path:

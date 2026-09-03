@@ -54,12 +54,13 @@ METADATA_RE = re.compile(r"^>\s*(Sources?|Raw|Collected|Published|Updated|Archiv
 STATUS_LINE_RE = re.compile(r"^>\s*\*\*Status:")
 LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
-RAW_LINK_RE = re.compile(r"\(([^)]+\.md)[^)]*\)")
+PAREN_RE = re.compile(r"\(([^()]*)\)")
 NO_MATERIAL_HEADING_RE = re.compile(
     r"^## \[[^\]]*\]\s*ingest\s*\|\s*no material:\s*(\S+)", re.IGNORECASE
 )
 ARCHIVED_RE = re.compile(r"^>\s*Archived:")
-FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+FENCE_OPEN_RE = re.compile(r"^ {0,3}(`+|~+)(.*)$")
+FENCE_OPEN_MIN = 3  # a fence needs >= 3 backticks or tildes
 FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 WS_RE = re.compile(r"\s+")
 
@@ -88,6 +89,8 @@ def fence_opener(line: str) -> tuple[str, int] | None:
     if not m:
         return None
     marker, info = m.groups()
+    if len(marker) < FENCE_OPEN_MIN:
+        return None
     if marker[0] == "`" and "`" in info:
         return None
     return marker[0], len(marker)
@@ -96,6 +99,52 @@ def fence_opener(line: str) -> tuple[str, int] | None:
 def is_fence_closer(line: str, char: str, length: int) -> bool:
     m = FENCE_CLOSE_RE.match(line)
     return bool(m and m.group(1)[0] == char and len(m.group(1)) >= length)
+
+
+def _feed_before_title(line: str, title: str, header: list,
+                       preamble: list, body: list) -> str:
+    """Handle a non-fence line while still looking for the first H1."""
+    if line.startswith("# "):
+        return "after_title"
+    preamble.append(line)
+    return "before_title"
+
+
+def _feed_after_title(line: str, title: str, header: list,
+                      preamble: list, body: list) -> str:
+    """Handle the first non-blank line after the title: header or body."""
+    if not line.strip():
+        return "after_title"
+    if line.strip().startswith(">"):
+        header.append(line)
+        return "header"
+    body.append(line)
+    return "body"
+
+
+def _feed_header(line: str, title: str, header: list,
+                 preamble: list, body: list) -> str:
+    """Handle a line inside the metadata blockquote block."""
+    if line.strip().startswith(">"):
+        header.append(line)
+        return "header"
+    body.append(line)
+    return "body"
+
+
+def _feed_body(line: str, title: str, header: list,
+               preamble: list, body: list) -> str:
+    """Handle a body line."""
+    body.append(line)
+    return "body"
+
+
+_STATE_HANDLERS = {
+    "before_title": _feed_before_title,
+    "after_title": _feed_after_title,
+    "header": _feed_header,
+    "body": _feed_body,
+}
 
 
 def parse_document(text: str) -> Document:
@@ -124,29 +173,10 @@ def parse_document(text: str) -> Document:
             if state == "after_title":
                 state = "body"
             continue
-        if state == "before_title":
-            if line.startswith("# "):
-                title = line
-                state = "after_title"
-            else:
-                preamble.append(line)
-        elif state == "after_title":
-            if not line.strip():
-                continue
-            if line.strip().startswith(">"):
-                header.append(line)
-                state = "header"
-            else:
-                body.append(line)
-                state = "body"
-        elif state == "header":
-            if line.strip().startswith(">"):
-                header.append(line)
-            else:
-                body.append(line)
-                state = "body"
-        else:
-            body.append(line)
+        new_state = _STATE_HANDLERS[state](line, title, header, preamble, body)
+        if state == "before_title" and new_state == "after_title":
+            title = line
+        state = new_state
 
     return Document(title, tuple(header), tuple(preamble + body))
 
@@ -197,6 +227,28 @@ def extract_numeric_date_candidates(line: str) -> list[Candidate]:
     return candidates
 
 
+def _feed_blockquote_line(stripped: str, blockquote: list,
+                          candidates: list, flush_paragraph) -> None:
+    """Handle a blockquote line during candidate extraction."""
+    flush_paragraph()
+    content = strip_noise(stripped.lstrip(">").strip())
+    blockquote.append(content)
+    candidates.extend(extract_numeric_date_candidates(content))
+
+
+def _feed_text_line(line: str, stripped: str, blockquote: list,
+                    paragraph: list, candidates: list,
+                    flush_blockquote, flush_paragraph) -> None:
+    """Handle a non-blockquote line during candidate extraction."""
+    flush_blockquote()
+    if not stripped:
+        flush_paragraph()
+        return
+    line = strip_noise(line)
+    candidates.extend(extract_numeric_date_candidates(line))
+    paragraph.append(line)
+
+
 def extract_candidates(text: str) -> list[Candidate]:
     document = parse_document(text)
     lines = ([document.title] if document.title else []) + [
@@ -237,18 +289,11 @@ def extract_candidates(text: str) -> list[Candidate]:
                 continue
             skip_status_block = False
         if stripped.startswith(">"):
-            flush_paragraph()
-            content = strip_noise(stripped.lstrip(">").strip())
-            blockquote.append(content)
-            candidates.extend(extract_numeric_date_candidates(content))
+            _feed_blockquote_line(stripped, blockquote, candidates,
+                                  flush_paragraph)
             continue
-        flush_blockquote()
-        if not stripped:
-            flush_paragraph()
-            continue
-        line = strip_noise(line)
-        candidates.extend(extract_numeric_date_candidates(line))
-        paragraph.append(line)
+        _feed_text_line(line, stripped, blockquote, paragraph, candidates,
+                         flush_blockquote, flush_paragraph)
     flush_blockquote()
     flush_paragraph()
     seen = set()
@@ -262,13 +307,33 @@ def extract_candidates(text: str) -> list[Candidate]:
     return unique
 
 
+def raw_link_target(inner: str) -> str | None:
+    """Return the .md path inside a parenthesised link target, else None.
+
+    Replaces the former regex r"\\(([^)]+\\.md)[^)]*\\)" whose nested
+    character-class quantifiers had super-linear backtracking on inputs
+    with many ".md" runs (Sonar python:S8786). This scan is linear.
+    """
+    target = inner
+    for sep in ("?", "#"):
+        cut = target.find(sep)
+        if cut != -1:
+            target = target[:cut]
+    if target.endswith(".md") and len(target) > 3:
+        return target
+    return None
+
+
 def raw_links_of(article_text: str) -> list[str]:
     """Raw links come only from the metadata header; identical lines in
     the body or in code fences are content, not fields."""
     links = []
     for line in parse_document(article_text).header:
         if re.match(r"^>\s*Raw:", line.strip()):
-            links.extend(RAW_LINK_RE.findall(line))
+            for m in PAREN_RE.finditer(line):
+                target = raw_link_target(m.group(1))
+                if target:
+                    links.append(target)
     return links
 
 
@@ -292,15 +357,25 @@ def source_content(path: Path) -> str:
     return normalize("\n".join(document.body))
 
 
-def check_article(article: Path, root: Path) -> tuple[list[str], list[str]]:
-    """Return (fidelity suspects, evidence errors) for one article."""
-    text = article.read_text(encoding="utf-8")
-    links = raw_links_of(text)
-    if not links:
-        if any(ARCHIVED_RE.match(line.strip()) for line in parse_document(text).header):
-            return [], []
-        return [], ["article has no Raw field"]
-    raw_root = (root / "raw").resolve()
+def resolve_wiki_path(root: Path, arg: str) -> Path:
+    """Resolve a CLI-supplied article path and validate it stays inside root.
+
+    The path is joined onto root and checked BEFORE any filesystem access,
+    so a faulty CLI argument (e.g. one containing '..') cannot escape the
+    wiki tree the checker is allowed to read.
+    """
+    candidate = Path(arg)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"path escapes wiki root: {arg}")
+    return resolved
+
+
+def _resolve_raw_links(article: Path, links: list[str],
+                       raw_root: Path) -> tuple[list[str], list[str]]:
+    """Resolve each Raw link to source content; collect errors instead."""
     raws = []
     errors = []
     for link in links:
@@ -311,12 +386,32 @@ def check_article(article: Path, root: Path) -> tuple[list[str], list[str]]:
             errors.append(f"unresolvable Raw link: {link}")
         else:
             raws.append(source_content(target))
+    return raws, errors
+
+
+def _find_unsupported_candidates(text: str, raws: list[str]) -> list[str]:
+    """Return candidate values not found in any raw source body."""
     misses = []
-    if raws:
-        for candidate in extract_candidates(text):
-            candidate = Candidate(candidate.kind, normalize(candidate.value))
-            if not any(contains(raw, candidate) for raw in raws):
-                misses.append(candidate.value)
+    if not raws:
+        return misses
+    for candidate in extract_candidates(text):
+        candidate = Candidate(candidate.kind, normalize(candidate.value))
+        if not any(contains(raw, candidate) for raw in raws):
+            misses.append(candidate.value)
+    return misses
+
+
+def check_article(article: Path, root: Path) -> tuple[list[str], list[str]]:
+    """Return (fidelity suspects, evidence errors) for one article."""
+    text = article.read_text(encoding="utf-8")
+    links = raw_links_of(text)
+    if not links:
+        if any(ARCHIVED_RE.match(line.strip()) for line in parse_document(text).header):
+            return [], []
+        return [], ["article has no Raw field"]
+    raw_root = (root / "raw").resolve()
+    raws, errors = _resolve_raw_links(article, links, raw_root)
+    misses = _find_unsupported_candidates(text, raws)
     return misses, errors
 
 
@@ -360,20 +455,17 @@ def unreferenced_raws(root: Path) -> list[str]:
     return missing
 
 
-def main(argv: list[str]) -> int:
-    root = Path(argv[1]).resolve() if len(argv) > 1 else Path.cwd()
-    wiki_dir = root / "wiki"
-    if not wiki_dir.is_dir():
-        print(f"no wiki/ directory under {root}")
-        return 1
-
+def _collect_articles(argv: list[str], root: Path, wiki_dir: Path) -> list[Path]:
+    """Resolve CLI article args to validated paths; empty list means all."""
     articles = []
     for arg in argv[2:]:
-        path = Path(arg)
-        if not path.is_absolute():
-            path = root / path
         try:
-            if path.resolve().relative_to(wiki_dir).as_posix() in SKIP_FILES:
+            path = resolve_wiki_path(root, arg)
+        except ValueError as exc:
+            print(f"warning: {exc}", file=sys.stderr)
+            continue
+        try:
+            if path.relative_to(wiki_dir).as_posix() in SKIP_FILES:
                 print(f"warning: {arg} is an index/log file, skipping", file=sys.stderr)
                 continue
         except ValueError:
@@ -382,6 +474,40 @@ def main(argv: list[str]) -> int:
             print(f"warning: article not found: {arg}", file=sys.stderr)
             continue
         articles.append(path)
+    return articles
+
+
+def _print_section(title: str, results: dict, root: Path,
+                   pick) -> tuple[int, Path]:
+    """Print one report section; returns (item_count, label helper)."""
+    def label(article: Path) -> Path:
+        try:
+            return article.resolve().relative_to(root)
+        except ValueError:
+            return article
+
+    print(f"## {title}")
+    count = 0
+    for article, items in results.items():
+        items = pick(items)
+        if items:
+            print(f"\n{label(article)}")
+            for item in items:
+                print(f"- {item}")
+                count += 1
+    if count == 0:
+        print("\n(none)" if title == "Fidelity suspects" else "(none)")
+    return count, label
+
+
+def main(argv: list[str]) -> int:
+    root = Path(argv[1]).resolve() if len(argv) > 1 else Path.cwd()
+    wiki_dir = root / "wiki"
+    if not wiki_dir.is_dir():
+        print(f"no wiki/ directory under {root}")
+        return 1
+
+    articles = _collect_articles(argv, root, wiki_dir)
     if len(argv) <= 2:
         articles = list(iter_articles(wiki_dir))
 
@@ -389,34 +515,11 @@ def main(argv: list[str]) -> int:
     for article in articles:
         results[article] = check_article(article, root)
 
-    def label(article: Path) -> Path:
-        try:
-            return article.resolve().relative_to(root)
-        except ValueError:
-            return article
-
     print("# Evidence check\n")
-    print("## Fidelity suspects")
-    suspect_count = 0
-    for article, (misses, _) in results.items():
-        if misses:
-            print(f"\n{label(article)}")
-            for miss in misses:
-                print(f"- {miss}")
-                suspect_count += 1
-    if suspect_count == 0:
-        print("\n(none)")
-
-    print("\n## Evidence errors")
-    error_count = 0
-    for article, (_, errors) in results.items():
-        if errors:
-            print(f"\n{label(article)}")
-            for error in errors:
-                print(f"- {error}")
-                error_count += 1
-    if error_count == 0:
-        print("(none)")
+    suspect_count, _ = _print_section("Fidelity suspects", results, root,
+                                      lambda r: r[0])
+    error_count, _ = _print_section("Evidence errors", results, root,
+                                    lambda r: r[1])
 
     print("\n## Unreferenced raw files")
     orphans = unreferenced_raws(root)

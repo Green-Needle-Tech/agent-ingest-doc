@@ -208,6 +208,21 @@ def check_log_format(log: Path, failures: list):
             f"'## [YYYY-MM-DD] action | subject' format")
 
 
+def _check_raw_files(raw: Path, layout: str, failures: list,
+                      source_chains: dict) -> int:
+    """Check every raw file; return the number checked."""
+    raw_files = [p for p in sorted(raw.rglob("*.md"))
+                 if not p.name.startswith(".")]
+    for p in raw_files:
+        if layout == "karpathy":
+            source, chain_key = check_karpathy_raw_file(p, failures)
+        else:
+            source, chain_key = check_legacy_raw_file(p, failures)
+        if source and chain_key:
+            source_chains.setdefault(source, set()).add(chain_key)
+    return len(raw_files)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--wiki", default=str(default_wiki()),
@@ -226,16 +241,7 @@ def main():
     source_chains: dict = {}
 
     if raw.is_dir():
-        raw_files = [p for p in sorted(raw.rglob("*.md"))
-                     if not p.name.startswith(".")]
-        checked = len(raw_files)
-        for p in raw_files:
-            if layout == "karpathy":
-                source, chain_key = check_karpathy_raw_file(p, failures)
-            else:
-                source, chain_key = check_legacy_raw_file(p, failures)
-            if source and chain_key:
-                source_chains.setdefault(source, set()).add(chain_key)
+        checked = _check_raw_files(raw, layout, failures, source_chains)
     else:
         failures.append(f"{raw}: raw/ directory not found")
 
